@@ -307,23 +307,41 @@ addEventListener("keydown", e => {
   e.preventDefault();
 });
 
+// Bounds of the part itself, from the drawn segments: brim, purge lines and
+// supports are left out so they don't pull the framing off the part.
+const NOT_PART = new Set(["Brim", "Custom", "Support", "Support interface", "Support transition"]);
+function partBounds(fromLayer, toLayer) {
+  const box = new THREE.Box3();
+  const p = new THREE.Vector3();
+  for (const t of pathData.types) {
+    if (NOT_PART.has(t.name)) continue;
+    const pos = t.line.geometry.attributes.position.array;
+    for (let i = t.layerStarts[fromLayer] * 6; i < t.layerStarts[toLayer] * 6; i += 3)
+      box.expandByPoint(p.set(pos[i], pos[i + 1], pos[i + 2]));
+  }
+  return box.translate(paths.position);
+}
+
 // Whole print: three-quarter view. Single layer: straight down onto it.
 function framePaths() {
   if (!pathData) return;
+  const layer = +$("#layer").value;
   const single = $("#single").checked;
-  $("#single").checked = false;  // measure the whole print, not just the drawn layer
-  updatePaths();
-  const box = new THREE.Box3().setFromObject(paths);
-  $("#single").checked = single;
-  updatePaths();
+  const whole = partBounds(0, pathData.layers.length);
+  let box = single ? partBounds(layer, layer + 1) : whole;
+  if (box.isEmpty()) {  // e.g. a support-only layer: frame the part's outline at this height
+    const z = pathData.layers[layer];
+    box = whole.clone();
+    box.min.z = box.max.z = z;
+  }
+  if (box.isEmpty()) return;
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   if (single) {
-    const z = pathData.layers[+$("#layer").value];
     const fov = THREE.MathUtils.degToRad(camera.fov);
-    const fit = Math.max(size.x / camera.aspect, size.y) / 2 / Math.tan(fov / 2);
-    controls.target.set(center.x, center.y, z);
-    camera.position.set(center.x, center.y - 1, z + fit * 1.15);
+    const fit = Math.max(size.x / camera.aspect, size.y, 20) / 2 / Math.tan(fov / 2);
+    controls.target.copy(center);
+    camera.position.set(center.x, center.y - 1, center.z + fit * 1.15);
   } else {
     const r = Math.max(size.x, size.y, size.z, 60);
     controls.target.copy(center);
