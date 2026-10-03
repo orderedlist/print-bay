@@ -3,7 +3,3 @@ gcode/*
 __pycache__/
 .venv/
 .DS_Store
-
-# downloaded models (licenses forbid redistribution; setup.py re-fetches)
-models/**/*.3mf
-models/**/*.stl
