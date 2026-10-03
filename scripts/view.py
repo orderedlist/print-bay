@@ -27,6 +27,7 @@ from run import COLORS, OPENSCAD  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 PAGE = ROOT / "viewer" / "index.html"
 CACHE = ROOT / ".cache" / "viewer"
+COSTS = ROOT / "costs.toml"
 MESH_TYPES = (".scad", ".3mf", ".stl")
 
 
@@ -40,6 +41,24 @@ def jobs():
     return found
 
 
+def rates():
+    with COSTS.open("rb") as fh:
+        return tomllib.load(fh)
+
+
+def seconds(duration):
+    """'7h 18m 29s' (or '1d 2h 3m 4s') -> seconds."""
+    units = {"d": 86400, "h": 3600, "m": 60, "s": 1}
+    return sum(int(n) * units[u] for n, u in re.findall(r"(\d+)([dhms])", duration))
+
+
+def cost(stats, r):
+    filament = stats["grams"] / 1000 * r["filament_per_kg"]
+    power = stats["seconds"] / 3600 * r["printer_watts"] / 1000 * r["power_per_kwh"]
+    return {"filament": round(filament, 2), "power": round(power, 2),
+            "total": round(filament + power, 2)}
+
+
 def gcode_stats(name):
     gcode = ROOT / "gcode" / f"{name}.gcode"
     if not gcode.exists():
@@ -49,14 +68,18 @@ def gcode_stats(name):
         tail = fh.read().decode(errors="replace")
     time = re.search(r"^; estimated printing time \(normal mode\) = (.+)$", tail, re.M)
     grams = re.search(r"^; total filament used \[g\] = ([\d.]+)", tail, re.M)
+    if not (time and grams):
+        return None
     return {
-        "time": time.group(1).strip() if time else None,
-        "grams": float(grams.group(1)) if grams else None,
+        "time": time.group(1).strip(),
+        "seconds": seconds(time.group(1)),
+        "grams": float(grams.group(1)),
     }
 
 
 def models():
     all_jobs = jobs()
+    r = rates()
     found = []
     for d in sorted(p for p in (ROOT / "models").iterdir() if p.is_dir()):
         mesh = next((f for ext in MESH_TYPES for f in sorted(d.glob(f"*{ext}"))), None)
@@ -66,13 +89,16 @@ def models():
             if Path(job["model"]).parent != d.relative_to(ROOT):
                 continue
             color = job.get("color")
+            stats = gcode_stats(job["name"])
+            if stats:
+                stats["cost"] = cost(stats, r)
             model_jobs.append({
                 "name": job["name"],
                 "file": job["file"],
                 "color": color,
                 "hex": COLORS.get(color.lower(), color) if color else None,
                 "copies": job.get("copies", 1),
-                "stats": gcode_stats(job["name"]),
+                "stats": stats,
             })
             mesh = ROOT / job["model"]
         found.append({
@@ -143,6 +169,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/":
                 self.send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
+            elif path == "/api/rates":
+                self.send(200, json.dumps(rates()).encode(), "application/json")
             elif path == "/api/models":
                 self.send(200, json.dumps(models()).encode(), "application/json")
             elif path.startswith("/mesh/"):

@@ -1,0 +1,4 @@
+# Rates for the viewer's cost estimates. Edit to match what you pay.
+filament_per_kg = 20.00   # USD per kg of filament
+printer_watts   = 180     # average draw while printing (K2: heated bed + hotend + fans)
+power_per_kwh   = 0.15    # USD per kWh

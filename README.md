@@ -12,6 +12,7 @@ scripts/k2.py       printer CLI (status, upload, print, watch, pause...)
 scripts/run.py      slice a job with OrcaSlicer, then print it
 scripts/view.py     3D viewer for everything in models/ (localhost:8765)
 viewer/             the viewer page
+costs.toml          filament and power rates for the viewer's cost estimates
 gcode/              sliced output (git-ignored)
 ```
 

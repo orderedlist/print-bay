@@ -45,6 +45,8 @@
   dd { margin: 0; font-variant-numeric: tabular-nums; }
   .job { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
   .job code { font-size: 12px; }
+  .muted { color: var(--muted); }
+  .rates { color: var(--muted); font-size: 12px; margin: -4px 0 12px; }
   .source { color: var(--muted); font-size: 13px; }
   .source h1 { display: none; }
   .source ul { padding-left: 18px; list-style: disc; }
@@ -179,6 +181,7 @@ async function show(model) {
   return size;
 }
 
+const money = (n) => `$${n.toFixed(2)}`;
 const fmt = (mm) => `${mm.toFixed(1)} mm`;
 const inch = (mm) => `${(mm / 25.4).toFixed(2)}″`;
 
@@ -198,10 +201,16 @@ function renderDetail(model, size) {
         <dt>Color</dt><dd><span class="swatch" style="display:inline-block;vertical-align:-2px;background:${j.hex || "transparent"}"></span> ${j.color || "—"}</dd>
         <dt>Copies</dt><dd>${j.copies}</dd>
         <dt>Last slice</dt><dd>${j.stats ? `${j.stats.time} · ${Math.round(j.stats.grams)} g` : "not sliced"}</dd>
+        ${j.stats ? `
+        <dt>Cost</dt><dd><strong>${money(j.stats.cost.total)}</strong> each
+          <span class="muted">(${money(j.stats.cost.filament)} filament + ${money(j.stats.cost.power)} power)</span></dd>
+        ${j.copies > 1 ? `<dt>All ${j.copies}</dt><dd>${money(j.stats.cost.total * j.copies)}</dd>` : ""}` : ""}
       </dl>
       <code>python scripts/run.py ${j.file}</code>
     </div>`).join("") || `<p class="source">No job prints this model yet.</p>`;
-  el.innerHTML = `<h2>${model.id}</h2>${dims}${jobs}<div class="source">${marked.parse(model.source)}</div>`;
+  const rateNote = model.jobs.some(j => j.stats) ? `<p class="rates">At $${rates.filament_per_kg}/kg filament,
+    ${rates.printer_watts} W × $${rates.power_per_kwh}/kWh · edit <code>costs.toml</code></p>` : "";
+  el.innerHTML = `<h2>${model.id}</h2>${dims}${jobs}${rateNote}<div class="source">${marked.parse(model.source)}</div>`;
   el.hidden = false;
 }
 
@@ -213,7 +222,8 @@ async function select(model, button) {
   renderDetail(model, size);
 }
 
-const models = await (await fetch("/api/models")).json();
+const [models, rates] = await Promise.all(
+  ["/api/models", "/api/rates"].map(async url => (await fetch(url)).json()));
 const list = $("#list");
 for (const model of models) {
   const li = document.createElement("li");
