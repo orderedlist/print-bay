@@ -60,5 +60,9 @@ python scripts/k2.py slots                         # filament loaded in the CFS
 python scripts/view.py                             # browse models in 3D
 ```
 
+In the viewer, **Toolpaths** shows a sliced job's G-code colored by feature
+(walls, infill, skins, bridges, supports). **X-ray** fades the walls so the
+infill shows through; **This layer only** looks straight down on one layer.
+
 OpenSCAD models need `brew install --cask openscad@snapshot`; `run.py`
 renders them to STL before slicing, and the viewer shows them upright.

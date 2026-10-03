@@ -59,6 +59,31 @@
     color: var(--muted); pointer-events: none;
   }
   #status[hidden] { display: none; }
+  .modes {
+    position: absolute; top: 14px; left: 14px; display: flex; padding: 3px; gap: 2px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
+  }
+  .modes button {
+    all: unset; cursor: pointer; padding: 5px 12px; border-radius: 6px; font-size: 13px; color: var(--muted);
+  }
+  .modes button[aria-pressed="true"] { background: var(--bg); color: var(--ink); font-weight: 600; }
+  .modes button:disabled { cursor: default; opacity: 0.45; }
+  .modes button:focus-visible { outline: 2px solid var(--accent); }
+  #paths-ui {
+    position: absolute; left: 14px; bottom: 14px; width: min(320px, calc(100% - 28px));
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+    font-size: 13px;
+  }
+  #paths-ui[hidden] { display: none; }
+  #paths-ui input[type=range] { width: 100%; accent-color: var(--accent); margin: 6px 0 2px; }
+  .layer-row { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .toggles { display: flex; gap: 16px; }
+  .layer-row label { color: var(--ink); display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  #legend { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 12px; margin-top: 10px; }
+  #legend label { display: flex; gap: 7px; align-items: center; cursor: pointer; white-space: nowrap; }
+  #legend input { margin: 0; accent-color: var(--accent); }
+  #legend i { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
   #hint { position: absolute; right: 14px; bottom: 12px; color: var(--muted); font-size: 12px; }
   @media (max-width: 760px) {
     body { grid-template-columns: 1fr; grid-template-rows: 55vh auto; height: auto; }
@@ -86,6 +111,20 @@
 <main>
   <canvas id="stage"></canvas>
   <div id="status">Loading…</div>
+  <div class="modes">
+    <button data-mode="model" aria-pressed="true">Model</button>
+    <button data-mode="paths" aria-pressed="false" disabled>Toolpaths</button>
+  </div>
+  <div id="paths-ui" hidden>
+    <div class="layer-row"><span id="layer-label"></span>
+      <span class="toggles">
+        <label><input type="checkbox" id="xray" checked> X-ray</label>
+        <label><input type="checkbox" id="single"> This layer only</label>
+      </span></div>
+    <input type="range" id="layer" min="0" value="0" aria-label="Layer">
+    <div id="legend"></div>
+    <div class="note">As sliced, in print orientation. X-ray fades the walls so infill shows through. Arrow keys step layers.</div>
+  </div>
   <div id="hint">Drag to orbit · scroll to zoom · right-drag to pan</div>
 </main>
 
@@ -165,6 +204,7 @@ async function show(model) {
   const center = box.getCenter(new THREE.Vector3());
   geom.translate(-center.x, -center.y, -box.min.z);  // centered on the bed
   geom.computeVertexNormals();
+  geom.computeBoundingBox();
 
   const hex = model.jobs[0]?.hex;
   mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({
@@ -172,14 +212,139 @@ async function show(model) {
   }));
   scene.add(mesh);
   status.hidden = true;
+  frameMesh();
+  return box.getSize(new THREE.Vector3());
+}
 
-  const size = box.getSize(new THREE.Vector3());
+function frameMesh() {
+  if (!mesh) return;
+  const size = mesh.geometry.boundingBox.getSize(new THREE.Vector3());
   const r = Math.max(size.x, size.y, size.z, 60);
   camera.position.set(-r * 1.4, -r * 1.9, size.z / 2 + r * 1.1);
   controls.target.set(0, 0, size.z / 2);
   controls.update();
-  return size;
 }
+
+// ---- Toolpaths (the sliced G-code, colored by feature) ----
+const FEATURE_COLORS = {
+  "Outer wall": "#ff8a3d", "Inner wall": "#ffd84a", "Overhang wall": "#3d5afe",
+  "Sparse infill": "#c2362f", "Internal solid infill": "#a05cd6", "Gap infill": "#e8e8e8",
+  "Top surface": "#ff5c8a", "Bottom surface": "#5aa9e6", "Bridge": "#3f7fc0",
+  "Internal Bridge": "#9cc9ef", "Brim": "#2f9e6e", "Support": "#4caf50",
+  "Support interface": "#2e7d32", "Custom": "#7aa6a8",
+};
+const hidden = new Set(["Brim", "Custom"]);
+const WALLS = new Set(["Outer wall", "Inner wall", "Overhang wall"]);
+const paths = new THREE.Group();
+scene.add(paths);
+let pathData = null;  // { layers, types: [{ name, layerStarts, line }] }
+let mode = "model";
+
+async function loadPaths(job) {
+  paths.children.forEach(c => c.geometry.dispose());
+  paths.clear();
+  pathData = null;
+  if (!job) return false;
+  const res = await fetch(`/toolpaths/${encodeURIComponent(job)}`);
+  if (!res.ok) return false;
+  const buf = await res.arrayBuffer();
+  const n = new DataView(buf).getUint32(0, true);
+  const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
+  const all = new Float32Array(buf, 4 + n);
+  for (const t of meta.types) {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute("position", new THREE.BufferAttribute(all.subarray(t.offset * 6, (t.offset + t.count) * 6), 3));
+    t.line = new THREE.LineSegments(geom, new THREE.LineBasicMaterial({
+      color: FEATURE_COLORS[t.name] || "#999", transparent: true }));
+    paths.add(t.line);
+  }
+  paths.position.set(-BED / 2, -BED / 2, 0);  // G-code is in bed coordinates
+  pathData = meta;
+
+  const slider = $("#layer");
+  slider.max = meta.layers.length - 1;
+  slider.value = meta.layers.length - 1;
+  $("#legend").innerHTML = meta.types.map(t => `
+    <label><input type="checkbox" data-type="${t.name}" ${hidden.has(t.name) ? "" : "checked"}>
+      <i style="background:${FEATURE_COLORS[t.name] || "#999"}"></i>${t.name}</label>`).join("");
+  updatePaths();
+  return true;
+}
+
+function updatePaths() {
+  if (!pathData) return;
+  const layer = +$("#layer").value;
+  const single = $("#single").checked;
+  const xray = $("#xray").checked && !single;  // a single layer is already a cross-section
+  for (const t of pathData.types) {
+    const from = single ? t.layerStarts[layer] : 0;
+    const to = t.layerStarts[layer + 1];
+    t.line.geometry.setDrawRange(from * 2, (to - from) * 2);
+    t.line.visible = !hidden.has(t.name);
+    const faded = xray && WALLS.has(t.name);
+    t.line.material.opacity = faded ? 0.06 : 1;
+    t.line.material.depthWrite = !faded;
+    t.line.renderOrder = faded ? 1 : 0;  // draw faded walls after what they cover
+  }
+  $("#layer-label").textContent =
+    `Layer ${layer + 1} / ${pathData.layers.length} · Z ${pathData.layers[layer].toFixed(2)} mm`;
+}
+
+$("#layer").addEventListener("input", updatePaths);
+$("#single").addEventListener("change", () => { updatePaths(); framePaths(); });
+$("#xray").addEventListener("change", updatePaths);
+$("#legend").addEventListener("change", e => {
+  const name = e.target.dataset.type;
+  e.target.checked ? hidden.delete(name) : hidden.add(name);
+  updatePaths();
+});
+addEventListener("keydown", e => {
+  if (mode !== "paths" || !["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
+  if (e.target.matches("input[type=range]")) return;  // the slider handles its own keys
+  const s = $("#layer");
+  s.value = +s.value + (e.key === "ArrowUp" || e.key === "ArrowRight" ? 1 : -1);
+  updatePaths();
+  e.preventDefault();
+});
+
+// Whole print: three-quarter view. Single layer: straight down onto it.
+function framePaths() {
+  if (!pathData) return;
+  const single = $("#single").checked;
+  $("#single").checked = false;  // measure the whole print, not just the drawn layer
+  updatePaths();
+  const box = new THREE.Box3().setFromObject(paths);
+  $("#single").checked = single;
+  updatePaths();
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  if (single) {
+    const z = pathData.layers[+$("#layer").value];
+    const fov = THREE.MathUtils.degToRad(camera.fov);
+    const fit = Math.max(size.x / camera.aspect, size.y) / 2 / Math.tan(fov / 2);
+    controls.target.set(center.x, center.y, z);
+    camera.position.set(center.x, center.y - 1, z + fit * 1.15);
+  } else {
+    const r = Math.max(size.x, size.y, size.z, 60);
+    controls.target.copy(center);
+    camera.position.set(center.x - r * 1.6, center.y - r * 2.2, center.z + r * 1.6);
+  }
+  controls.update();
+}
+function setMode(next) {
+  mode = next;
+  document.querySelectorAll(".modes button").forEach(b => b.setAttribute("aria-pressed", b.dataset.mode === mode));
+  if (mesh) mesh.visible = mode === "model";
+  paths.visible = mode === "paths";
+  $("#paths-ui").hidden = mode !== "paths";
+  $("#hint").hidden = mode === "paths";
+  if (mode === "paths") {
+    framePaths();
+  } else if (mode === "model") {
+    frameMesh();
+  }
+}
+document.querySelectorAll(".modes button").forEach(b => b.addEventListener("click", () => setMode(b.dataset.mode)));
 
 const money = (n) => `$${n.toFixed(2)}`;
 const fmt = (mm) => `${mm.toFixed(1)} mm`;
@@ -218,7 +383,13 @@ async function select(model, button) {
   document.querySelectorAll("li button").forEach(b => b.setAttribute("aria-current", b === button));
   history.replaceState(null, "", `#${model.id}`);
   renderDetail(model, null);
-  const size = await show(model);
+  const sliced = model.jobs.find(j => j.stats);
+  const pathsButton = $('.modes button[data-mode="paths"]');
+  pathsButton.disabled = true;
+  pathsButton.title = sliced ? "" : "Slice a job for this model to see its toolpaths";
+  const [size, hasPaths] = await Promise.all([show(model), loadPaths(sliced?.name)]);
+  pathsButton.disabled = !hasPaths;
+  setMode(hasPaths && mode === "paths" ? "paths" : "model");
   renderDetail(model, size);
 }
 
