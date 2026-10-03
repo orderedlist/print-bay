@@ -41,16 +41,19 @@ interface Props {
   placeholder: string;
   allowUploads?: boolean;
   empty?: ReactNode;
+  /** Prompt starting points: clicking one fills the composer (it isn't sent). */
+  starters?: string[];
   toast: (msg: string, error?: boolean) => void;
 }
 
-export function AgentPanel({ session, placeholder, allowUploads, empty, toast }: Props) {
+export function AgentPanel({ session, placeholder, allowUploads, empty, starters, toast }: Props) {
   const [text, setText] = useState("");
   const [uploads, setUploads] = useState<string[]>([]);
   const [uploading, setUploading] = useState(0);
   const [dragging, setDragging] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const input = useRef<HTMLTextAreaElement>(null);
   const base = `/api/agent/${session.id}`;
 
   useEffect(() => { // follow the conversation
@@ -106,6 +109,13 @@ export function AgentPanel({ session, placeholder, allowUploads, empty, toast }:
       </div>
 
       <div className="agent-compose">
+        {starters && !session.running && !text && (
+          <div className="starters" aria-label="Starting points">
+            {starters.map((s) => (
+              <button key={s} className="starter" onClick={() => { setText(s); input.current?.focus(); }}>{s}</button>
+            ))}
+          </div>
+        )}
         {(uploads.length > 0 || uploading > 0) && (
           <div className="agent-photos">
             {uploads.map((u) => (
@@ -116,7 +126,7 @@ export function AgentPanel({ session, placeholder, allowUploads, empty, toast }:
             {uploading > 0 && <span className="muted" style={{ fontSize: 12 }}>Uploading…</span>}
           </div>
         )}
-        <textarea className="field agent-input" rows={3} value={text} placeholder={placeholder}
+        <textarea ref={input} className="field agent-input" rows={3} value={text} placeholder={placeholder}
           onChange={(e) => setText(e.target.value)}
           onPaste={allowUploads ? (e) => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); upload(files); } } : undefined}
           onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } }} />
@@ -128,7 +138,7 @@ export function AgentPanel({ session, placeholder, allowUploads, empty, toast }:
           <button className="btn btn-sm" disabled={session.running || session.turns === 0} onClick={() => call("undo")}
             title="Restore the files from before Claude's last change">Undo last change</button>
           <span className="spacer" />
-          {session.cost > 0 && <span className="faint mono" style={{ fontSize: 11 }} title="Claude usage for this chat">{money(session.cost)}</span>}
+          {session.cost >= 0.01 && <span className="faint mono" style={{ fontSize: 11 }} title="Claude usage for this chat">{money(session.cost)}</span>}
           {session.running
             ? <button className="btn btn-sm btn-danger" onClick={() => call("stop")}>Stop</button>
             : <button className="btn btn-sm btn-primary" disabled={!text.trim() && !uploads.length} onClick={send}>Send</button>}

@@ -7,6 +7,16 @@ import type { AgentSession, Model } from "../types";
 
 const KEY = "printbay.newModelSession";
 
+// Starting points for a first request: each states what it's for and what it must fit.
+const STARTERS = [
+  "A wall hook for a 20 mm dowel, mounted with two screws",
+  "A clip that holds a bundle of cables on the wall with one screw",
+  "A knob for a 6 mm D-shaft",
+  "A bin for small parts that fits a drawer (I'll measure it)",
+  "A holder for my calipers that mounts under a shelf",
+  "An adapter between two hoses (I'll give both diameters)",
+];
+
 function stored(): string | null {
   try { return localStorage.getItem(KEY); } catch { return null; }
 }
@@ -53,7 +63,7 @@ export function NewModel({ live, models, openModel, toast }: Props) {
         <section className="wide">
           <div className="card new-chat">
             {session ? (
-              <AgentPanel session={session} toast={toast} allowUploads
+              <AgentPanel session={session} toast={toast} allowUploads starters={session.transcript.length ? undefined : STARTERS}
                 placeholder="What should we make? Add photos of the space or the thing it holds. (⌘↩ to send)"
                 empty={<div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <div style={{ fontSize: 16, fontWeight: 600 }}>Describe what you need</div>

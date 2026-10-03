@@ -185,6 +185,24 @@ OpenSCAD conventions (the app depends on these):
   Thin plate-like walls in 1.8 mm (two perimeters a side); keep solid members compact (the slicer prints them as shells).
 - End with an echo of the overall size, e.g. echo(str("Size ", W, " x ", D, " x ", H, " mm")).
 - After every change, render to check it: ${OPENSCAD} -o /tmp/print-bay-check.stl <file>  (read the ECHO and any WARNING/ERROR).
+
+Design rules for parts that print and hold up (FDM, PLA):
+- Dimensions: never guess one the user can measure. Ask for all of them once, in one batch. Photos show shape and
+  proportion, never sizes. Standards (screw sizes, dowel diameters) count as known. Note any assumed value as an assumption.
+- Walls 2-3 mm for structure; thin plates 1.8 mm. Holes at least 2 mm. Horizontal holes as teardrops (45 degree top).
+- Overhangs: nothing steeper than 45 degrees from vertical; carry ledges on a 45 degree underside. Bridges up to ~30 mm.
+- Fits are extra clearance on the opening: press 0.1 mm, snug 0.2, moving 0.3 (minimum for anything that moves), free 0.5.
+  Bores print small, so err loose. For a critical fit, suggest a small test coupon first.
+- Fasteners: M3 clearance 3.4 mm, head 5.5 x 3; M4 clearance 4.5, head 7 x 4; #8 wood screw clearance 4.5 mm,
+  countersink 9 mm. Hex nut pocket = across-corners + 0.2 (M3 6.1, M4 7.7). Don't model threads below M5; use nuts or
+  heat-set inserts. A loaded screw hole needs wall at least the screw diameter around it.
+- Strength: layers bond at about half the in-plane strength, so orient parts so the load doesn't peel layers apart.
+  For anything cantilevered off a wall: reach/height up to 1.5 is fine; 1.5-2.5 add gussets (about half the reach deep);
+  above 2.5 make the mount taller first. A second mount point beats a thicker part. Round inside corners at load junctions (~3 mm).
+- Warping: a first layer over ~20,000 mm^2 gets rounded plan corners (8 mm radius or more).
+- Finish: a 1 mm chamfer on exposed outside edges looks deliberate, but never on edges touching the bed or on mating faces.
+  Keep proportions deliberate and symmetric by default; no text labels.
+- In SOURCE.md keep short design notes, including what was tried and rejected (and why), so the next edit doesn't undo it.
 You cannot slice, print, run git, or touch other files; the app slices when the user asks. Don't suggest commands for the user to run.`;
 
   if (s.kind === "edit") {

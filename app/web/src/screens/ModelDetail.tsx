@@ -14,6 +14,15 @@ interface Props {
   toast: (msg: string, error?: boolean) => void;
 }
 
+// Common revisions, offered as starting points in the Claude sidebar.
+const EDIT_STARTERS = [
+  "Make it stronger where it's weakest",
+  "Add a 1 mm chamfer to the outside edges",
+  "Make it print without supports",
+  "Cut the print time without making it weaker",
+  "It's too loose: tighten the fit by 0.2 mm",
+];
+
 /** Just enough Markdown for SOURCE.md: bullets, `code` and bare links. */
 function Source({ text }: { text: string }) {
   const inline = (s: string): ReactNode[] =>
@@ -160,7 +169,7 @@ export function ModelDetail({ model, live, back, print, toast }: Props) {
             <div className="card-pad muted">Claude can only edit OpenSCAD models. This one is a downloaded {model.kind?.toUpperCase()} mesh,
               so its shape is fixed; start a <a href="#/new">new model</a> to have Claude design a version you can change.</div>
           ) : session ? (
-            <AgentPanel session={session} toast={toast} allowUploads
+            <AgentPanel session={session} toast={toast} allowUploads starters={EDIT_STARTERS}
               placeholder="Describe a change, e.g. “make the lip 8 mm tall” (⌘↩ to send)"
               empty={<div className="muted" style={{ fontSize: 13 }}>
                 Claude edits <code>models/{model.id}/</code>{job ? <> and <code>{job.file}</code></> : null}, renders to check, and the
