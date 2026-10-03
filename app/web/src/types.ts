@@ -42,3 +42,22 @@ export interface QueueState { active: QueueEntry | null; entries: QueueEntry[] }
 export interface SliceEvent { job: string; state: "running" | "done" | "failed"; line: string }
 
 export const IDLE_STATES = new Set(["standby", "complete", "cancelled", "error"]);
+
+export type AgentEntry =
+  | { role: "user"; text: string; uploads: string[] }
+  | { role: "assistant"; text: string }
+  | { role: "tool"; label: string; ok: boolean | null; id: string }
+  | { role: "note"; text: string; error?: boolean };
+
+export interface AgentSession {
+  id: string;
+  kind: "edit" | "new";
+  modelId: string | null;
+  job: string | null;
+  claudeSessionId: string | null;
+  transcript: AgentEntry[];
+  running: boolean;
+  turns: number;
+  cost: number;
+  createdAt: number;
+}

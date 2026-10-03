@@ -2,15 +2,17 @@ import { useCallback, useEffect, useState } from "react";
 import { useLive, useModels } from "./api";
 import { Library } from "./screens/Library";
 import { ModelDetail } from "./screens/ModelDetail";
+import { NewModel } from "./screens/NewModel";
 import { Printer, stateLabel } from "./screens/Printer";
 import { PrintSheet } from "./screens/PrintSheet";
 import type { Model } from "./types";
 
-type Route = { screen: "printer" } | { screen: "library" } | { screen: "model"; id: string };
+type Route = { screen: "printer" } | { screen: "library" } | { screen: "new" } | { screen: "model"; id: string };
 
 function parseRoute(hash: string): Route {
   const [, screen, id] = hash.split("/");
   if (screen === "library") return { screen: "library" };
+  if (screen === "new") return { screen: "new" };
   if (screen === "model" && id) return { screen: "model", id: decodeURIComponent(id) };
   return { screen: "printer" };
 }
@@ -68,7 +70,9 @@ export function App() {
       ) : route.screen === "printer" ? (
         <Printer live={live} models={models} toast={toast} openModel={(id) => go(`/model/${id}`)} />
       ) : route.screen === "library" ? (
-        <Library models={models} openModel={(id) => go(`/model/${id}`)} print={setPrinting} />
+        <Library models={models} openModel={(id) => go(`/model/${id}`)} print={setPrinting} newModel={() => go("/new")} />
+      ) : route.screen === "new" ? (
+        <NewModel live={live} models={models} openModel={(id) => go(`/model/${id}`)} toast={toast} />
       ) : model ? (
         <ModelDetail key={model.id} model={model} live={live} back={() => go("/library")} print={setPrinting} toast={toast} />
       ) : (

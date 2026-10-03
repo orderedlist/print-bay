@@ -6,14 +6,19 @@ interface Props {
   models: Model[];
   openModel: (id: string) => void;
   print: (model: Model) => void;
+  newModel: () => void;
 }
 
-export function Library({ models, openModel, print }: Props) {
+export function Library({ models, openModel, print, newModel }: Props) {
   return (
     <main className="page" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12 }}>
         <h1 style={{ fontSize: 22 }}>Library</h1>
         <span className="muted">{models.length} {models.length === 1 ? "model" : "models"}</span>
+        <span className="spacer" />
+        <button className="btn btn-primary" onClick={newModel}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" /></svg>
+          New model</button>
       </div>
       <div className="grid">
         {models.map((m) => {

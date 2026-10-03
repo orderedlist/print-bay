@@ -82,6 +82,18 @@ npm run dev         # server with reload + Vite on :5173
 the server inside Electron. Settings come from the environment: `K2_HOST`,
 `PORT`, `BIND`, `OPENSCAD`, `PYTHON`.
 
+### Claude
+
+**Edit with Claude** (on an OpenSCAD model) and **New model** (in the Library)
+chat with Claude Code through `claude -p`, using your existing Claude Code
+login. Each message is one run, resumed with `--resume`, under
+`--permission-mode dontAsk` with an allow list: an edit chat can only change
+`models/<id>/` and its job file, and a new-model chat can only add to
+`models/` and `jobs/`. Neither can slice, print, or run git. Every turn is
+snapshotted under `.cache/app/agent/`, so **Undo last change** restores the
+files exactly. New-model chats take photos (button, drag and drop, or paste).
+Set `CLAUDE` if the CLI isn't at `~/.local/bin/claude`.
+
 The K2 serves its camera over WebRTC on port 8000 and only connects when the
 offer asks for a two-way (`sendrecv`) video channel. It seems to allow one
 viewer at a time, so the app drops the connection when you leave the Printer

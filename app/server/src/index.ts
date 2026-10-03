@@ -1,6 +1,7 @@
 // Print Bay server: a typed API over the printer and this repo, plus the web UI.
 // Exported as start() so the Electron shell can run it in-process.
 import fs from "node:fs";
+import path from "node:path";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import { CAMERA_URL, HOST, K2_HOST, PORT, WEB_DIST } from "./config.js";
@@ -11,6 +12,7 @@ import { toolpathsFor } from "./gcode.js";
 import * as moonraker from "./moonraker.js";
 import { getQueue, print, removeEntry, startNext } from "./printing.js";
 import { isSlicing, slice } from "./slice.js";
+import * as agent from "./agent.js";
 
 export interface StartOptions { port?: number; host?: string; quiet?: boolean }
 
@@ -72,6 +74,24 @@ export async function start(opts: StartOptions = {}) {
   app.delete<{ Params: { id: string } }>("/api/queue/:id", async (req) => {
     removeEntry(req.params.id);
     return getQueue();
+  });
+
+  // ---- Claude agents ----
+  app.addContentTypeParser(/^image\//, { parseAs: "buffer", bodyLimit: 15 * 1024 * 1024 }, (_req, body, done) => done(null, body));
+  app.post<{ Body: { kind: "edit" | "new"; modelId?: string } }>("/api/agent", async (req) =>
+    agent.createSession(req.body.kind === "new" ? "new" : "edit", req.body.modelId));
+  app.get<{ Params: { id: string } }>("/api/agent/:id", async (req) => agent.getSession(req.params.id));
+  app.get<{ Params: { id: string } }>("/api/models/:id/agent", async (req) => agent.latestFor(req.params.id));
+  app.post<{ Params: { id: string }; Body: { text: string; uploads?: string[] } }>("/api/agent/:id/messages", async (req) =>
+    agent.send(req.params.id, req.body.text ?? "", req.body.uploads ?? []));
+  app.post<{ Params: { id: string } }>("/api/agent/:id/stop", async (req) => agent.stop(req.params.id));
+  app.post<{ Params: { id: string } }>("/api/agent/:id/undo", async (req) => agent.undo(req.params.id));
+  app.post<{ Params: { id: string }; Body: Buffer }>("/api/agent/:id/uploads", async (req) =>
+    ({ name: agent.saveUpload(req.params.id, String(req.headers["content-type"]), req.body) }));
+  app.get<{ Params: { id: string; name: string } }>("/api/agent/:id/uploads/:name", async (req, reply) => {
+    const file = agent.uploadPath(req.params.id, req.params.name);
+    const ext = path.extname(file).slice(1).replace("jpg", "jpeg");
+    return reply.type(`image/${ext}`).header("Cache-Control", "max-age=86400").send(fs.createReadStream(file));
   });
 
   // ---- live events ----

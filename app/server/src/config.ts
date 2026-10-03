@@ -26,6 +26,11 @@ export const OPENSCAD = process.env.OPENSCAD ?? firstExisting(
   "/Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD",
   "openscad",
 );
+export const CLAUDE = process.env.CLAUDE ?? firstExisting(
+  path.join(process.env.HOME ?? "", ".local/bin/claude"),
+  "/opt/homebrew/bin/claude",
+  "claude",
+);
 export const PYTHON = process.env.PYTHON ?? firstExisting(path.join(ROOT, ".venv/bin/python"), "python3");
 
 fs.mkdirSync(CACHE, { recursive: true });

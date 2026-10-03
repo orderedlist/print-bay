@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Model, PrinterStatus, QueueState, SliceEvent } from "./types";
+import type { AgentSession, Model, PrinterStatus, QueueState, SliceEvent } from "./types";
 
 export async function api<T = unknown>(path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
   const { json, ...rest } = init ?? {};
@@ -19,15 +19,20 @@ export interface Live {
   queue: QueueState;
   slice: Record<string, SliceEvent[]>; // log lines per job
   modelsVersion: number; // bumps when models/slices change
+  agents: Record<string, AgentSession>; // Claude sessions updated since load
 }
 
 /** One EventSource for the whole app: printer status, queue, slicing progress. */
 export function useLive(): Live {
-  const [live, setLive] = useState<Live>({ status: null, queue: { active: null, entries: [] }, slice: {}, modelsVersion: 0 });
+  const [live, setLive] = useState<Live>({ status: null, queue: { active: null, entries: [] }, slice: {}, modelsVersion: 0, agents: {} });
   useEffect(() => {
     const es = new EventSource("/api/events");
     es.addEventListener("status", (e) => setLive((l) => ({ ...l, status: JSON.parse((e as MessageEvent).data) })));
     es.addEventListener("queue", (e) => setLive((l) => ({ ...l, queue: JSON.parse((e as MessageEvent).data) })));
+    es.addEventListener("agent", (e) => {
+      const s: AgentSession = JSON.parse((e as MessageEvent).data);
+      setLive((l) => ({ ...l, agents: { ...l.agents, [s.id]: s } }));
+    });
     es.addEventListener("models", () => setLive((l) => ({ ...l, modelsVersion: l.modelsVersion + 1 })));
     es.addEventListener("slice", (e) => {
       const ev: SliceEvent = JSON.parse((e as MessageEvent).data);
@@ -87,4 +92,15 @@ export function colorName(hex: string): string {
 /** The job behind a printer filename: "stacking-box-T1A.gcode" -> "stacking-box". */
 export function jobFromFilename(filename: string): string {
   return filename.replace(/\.gcode$/, "").replace(/-T\d[A-D]$/, "");
+}
+
+/** A Claude session: fetched once, then kept current by live `agent` events. */
+export function useAgentSession(id: string | null, live: Live): AgentSession | null {
+  const [fetched, setFetched] = useState<AgentSession | null>(null);
+  useEffect(() => {
+    setFetched(null);
+    if (id) api<AgentSession>(`/api/agent/${id}`).then(setFetched).catch(() => setFetched(null));
+  }, [id]);
+  if (!id) return null;
+  return live.agents[id] ?? (fetched?.id === id ? fetched : null);
 }

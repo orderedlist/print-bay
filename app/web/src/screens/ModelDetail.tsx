@@ -1,6 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type * as THREE from "three";
-import { api, inches, mm, money, title, type Live } from "../api";
+import { api, inches, mm, money, title, useAgentSession, type Live } from "../api";
+import { AgentPanel } from "../components/AgentPanel";
+import type { AgentSession } from "../types";
 import { ModelViewer } from "../components/ModelViewer";
 import type { Model, ScadParam } from "../types";
 
@@ -36,6 +38,19 @@ export function ModelDetail({ model, live, back, print, toast }: Props) {
   const [params, setParams] = useState<ScadParam[]>([]);
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [agentId, setAgentId] = useState<string | null>(null);
+  const [agentOpen, setAgentOpen] = useState(false);
+  const session = useAgentSession(agentId, live);
+  const canEdit = model.kind === "scad";
+
+  const openAgent = async (fresh = false) => {
+    setAgentOpen(true);
+    try {
+      const existing = fresh ? null : await api<AgentSession | null>(`/api/models/${model.id}/agent`);
+      const s = existing ?? await api<AgentSession>("/api/agent", { method: "POST", json: { kind: "edit", modelId: model.id } });
+      setAgentId(s.id);
+    } catch (e) { toast((e as Error).message, true); }
+  };
   const log = job ? live.slice[job.name] ?? [] : [];
   const slicing = job?.slicing || log.at(-1)?.state === "running";
 
@@ -61,8 +76,14 @@ export function ModelDetail({ model, live, back, print, toast }: Props) {
   };
 
   return (
-    <main className="page" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div><button className="tab" onClick={back}>← Library</button></div>
+    <main className={agentOpen ? "page with-drawer" : "page"} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <button className="tab" onClick={back}>← Library</button>
+        <span className="spacer" />
+        {!agentOpen && <button className="btn btn-sm" onClick={() => openAgent()}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" /></svg>
+          Edit with Claude</button>}
+      </div>
       <div className="split">
         <section className="wide"><ModelViewer model={model} onSize={setSize} /></section>
         <aside className="side">
@@ -125,6 +146,37 @@ export function ModelDetail({ model, live, back, print, toast }: Props) {
           {model.source && <div className="card card-pad"><Source text={model.source} /></div>}
         </aside>
       </div>
+
+      {agentOpen && (
+        <aside className="drawer" aria-label="Edit with Claude">
+          <div className="drawer-head">
+            <h2 style={{ fontSize: 15 }}>Edit with Claude</h2>
+            <span className="spacer" />
+            {canEdit && session && session.transcript.length > 0 && !session.running &&
+              <button className="btn btn-sm" onClick={() => openAgent(true)}>New chat</button>}
+            <button className="btn btn-sm btn-icon" aria-label="Close" onClick={() => setAgentOpen(false)}>✕</button>
+          </div>
+          {!canEdit ? (
+            <div className="card-pad muted">Claude can only edit OpenSCAD models. This one is a downloaded {model.kind?.toUpperCase()} mesh,
+              so its shape is fixed; start a <a href="#/new">new model</a> to have Claude design a version you can change.</div>
+          ) : session ? (
+            <AgentPanel session={session} toast={toast} allowUploads
+              placeholder="Describe a change, e.g. “make the lip 8 mm tall” (⌘↩ to send)"
+              empty={<div className="muted" style={{ fontSize: 13 }}>
+                Claude edits <code>models/{model.id}/</code>{job ? <> and <code>{job.file}</code></> : null}, renders to check, and the
+                preview updates here. Every change can be undone. Re-slice when you're happy.
+              </div>} />
+          ) : <div className="card-pad muted">Starting…</div>}
+          {job?.stale && session && !session.running && session.turns > 0 && (
+            <div className="drawer-foot">
+              <span className="muted" style={{ fontSize: 13 }}>The model changed since its last slice.</span>
+              <button className="btn btn-sm btn-primary" disabled={slicing}
+                onClick={() => api(`/api/jobs/${job.name}/slice`, { method: "POST" }).catch((e) => toast(e.message, true))}>
+                {slicing ? "Slicing…" : "Re-slice"}</button>
+            </div>
+          )}
+        </aside>
+      )}
     </main>
   );
 }
