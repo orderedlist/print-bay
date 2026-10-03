@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D Prints</title>
+<style>
+  :root {
+    --bg: #f4f3f0; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a66;
+    --line: #e2e0db; --accent: #d9622b; --stage: #ebeae6; --grid: #c9c7c1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --panel: #1f1f1d; --ink: #ecebe7; --muted: #9a9993;
+      --line: #2e2e2b; --accent: #f08048; --stage: #121211; --grid: #34342f;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    display: grid; grid-template-columns: 340px 1fr; height: 100vh;
+  }
+  aside { border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto; }
+  header { padding: 20px 20px 12px; }
+  header h1 { margin: 0; font-size: 17px; letter-spacing: -0.01em; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+  ul { list-style: none; margin: 0; padding: 0 10px 10px; }
+  li button {
+    all: unset; box-sizing: border-box; width: 100%; cursor: pointer;
+    display: grid; grid-template-columns: 14px 1fr auto; gap: 10px; align-items: center;
+    padding: 10px; border-radius: 8px;
+  }
+  li button:hover { background: var(--bg); }
+  li button[aria-current="true"] { background: var(--bg); box-shadow: inset 2px 0 0 var(--accent); }
+  li button:focus-visible { outline: 2px solid var(--accent); }
+  .swatch { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--line); }
+  .name { font-weight: 600; }
+  .kind { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); text-transform: uppercase; }
+  #detail { border-top: 1px solid var(--line); padding: 16px 20px 24px; }
+  #detail h2 { margin: 0 0 10px; font-size: 15px; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0 0 14px; }
+  dt { color: var(--muted); }
+  dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .job { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+  .job code { font-size: 12px; }
+  .source { color: var(--muted); font-size: 13px; }
+  .source h1 { display: none; }
+  .source ul { padding-left: 18px; list-style: disc; }
+  .source code { font-size: 12px; }
+  .source a { color: var(--accent); }
+  main { position: relative; background: var(--stage); min-width: 0; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #status {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    color: var(--muted); pointer-events: none;
+  }
+  #status[hidden] { display: none; }
+  #hint { position: absolute; right: 14px; bottom: 12px; color: var(--muted); font-size: 12px; }
+  @media (max-width: 760px) {
+    body { grid-template-columns: 1fr; grid-template-rows: 55vh auto; height: auto; }
+    main { grid-row: 1; height: 55vh; }
+    aside { border-right: 0; }
+  }
+</style>
+<script type="importmap">
+  { "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+      "marked": "https://cdn.jsdelivr.net/npm/marked@15.0.0/lib/marked.esm.js"
+  } }
+</script>
+</head>
+<body>
+<aside>
+  <header>
+    <h1>3D Prints</h1>
+    <p>Creality K2 · 260 × 260 mm bed</p>
+  </header>
+  <ul id="list"></ul>
+  <section id="detail" hidden></section>
+</aside>
+<main>
+  <canvas id="stage"></canvas>
+  <div id="status">Loading…</div>
+  <div id="hint">Drag to orbit · scroll to zoom · right-drag to pan</div>
+</main>
+
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { STLLoader } from "three/addons/loaders/STLLoader.js";
+import { marked } from "marked";
+
+const BED = 260;
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const $ = sel => document.querySelector(sel);
+
+const canvas = $("#stage");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(35, 1, 1, 5000);
+camera.up.set(0, 0, 1);  // models are Z-up
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8478, 1.6));
+const key = new THREE.DirectionalLight(0xffffff, 2.2);
+key.position.set(-300, -400, 600);
+scene.add(key);
+const rim = new THREE.DirectionalLight(0xffffff, 0.8);
+rim.position.set(400, 300, 200);
+scene.add(rim);
+
+let bed;
+function buildBed() {
+  if (bed) scene.remove(bed);
+  bed = new THREE.Group();
+  const grid = new THREE.GridHelper(BED, 13, css("--grid"), css("--grid"));
+  grid.rotation.x = Math.PI / 2;
+  const edge = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.PlaneGeometry(BED, BED)),
+    new THREE.LineBasicMaterial({ color: css("--muted") }));
+  bed.add(grid, edge);
+  scene.add(bed);
+  scene.background = new THREE.Color(css("--stage"));
+}
+buildBed();
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", buildBed);
+
+function resize() {
+  const { clientWidth: w, clientHeight: h } = canvas.parentElement;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(canvas.parentElement);
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+
+// Very dark filament disappears against the stage; lift it just enough to read.
+function displayColor(hex) {
+  const c = new THREE.Color(hex || "#9a9a96");
+  const hsl = c.getHSL({});
+  if (hsl.l < 0.18) c.setHSL(hsl.h, hsl.s, 0.18);
+  return c;
+}
+
+const loader = new STLLoader();
+let mesh;
+async function show(model) {
+  const status = $("#status");
+  status.textContent = model.kind === "scad" ? "Rendering with OpenSCAD…" : "Loading…";
+  status.hidden = false;
+  if (mesh) { scene.remove(mesh); mesh.geometry.dispose(); mesh = null; }
+
+  const res = await fetch(`/mesh/${encodeURIComponent(model.id)}`);
+  if (!res.ok) { status.textContent = `Couldn't load: ${await res.text()}`; return null; }
+  const geom = loader.parse(await res.arrayBuffer());
+  geom.computeBoundingBox();
+  const box = geom.boundingBox;
+  const center = box.getCenter(new THREE.Vector3());
+  geom.translate(-center.x, -center.y, -box.min.z);  // centered on the bed
+  geom.computeVertexNormals();
+
+  const hex = model.jobs[0]?.hex;
+  mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({
+    color: displayColor(hex), roughness: 0.65, metalness: 0.05,
+  }));
+  scene.add(mesh);
+  status.hidden = true;
+
+  const size = box.getSize(new THREE.Vector3());
+  const r = Math.max(size.x, size.y, size.z, 60);
+  camera.position.set(-r * 1.4, -r * 1.9, size.z / 2 + r * 1.1);
+  controls.target.set(0, 0, size.z / 2);
+  controls.update();
+  return size;
+}
+
+const fmt = (mm) => `${mm.toFixed(1)} mm`;
+const inch = (mm) => `${(mm / 25.4).toFixed(2)}″`;
+
+function renderDetail(model, size) {
+  const el = $("#detail");
+  const dims = size ? `
+    <dl>
+      <dt>Width</dt><dd>${fmt(size.x)} · ${inch(size.x)}</dd>
+      <dt>Depth</dt><dd>${fmt(size.y)} · ${inch(size.y)}</dd>
+      <dt>Height</dt><dd>${fmt(size.z)} · ${inch(size.z)}</dd>
+      <dt>File</dt><dd><code>${model.file}</code></dd>
+    </dl>` : "";
+  const jobs = model.jobs.map(j => `
+    <div class="job">
+      <dl>
+        <dt>Job</dt><dd><code>${j.file}</code></dd>
+        <dt>Color</dt><dd><span class="swatch" style="display:inline-block;vertical-align:-2px;background:${j.hex || "transparent"}"></span> ${j.color || "—"}</dd>
+        <dt>Copies</dt><dd>${j.copies}</dd>
+        <dt>Last slice</dt><dd>${j.stats ? `${j.stats.time} · ${Math.round(j.stats.grams)} g` : "not sliced"}</dd>
+      </dl>
+      <code>python scripts/run.py ${j.file}</code>
+    </div>`).join("") || `<p class="source">No job prints this model yet.</p>`;
+  el.innerHTML = `<h2>${model.id}</h2>${dims}${jobs}<div class="source">${marked.parse(model.source)}</div>`;
+  el.hidden = false;
+}
+
+async function select(model, button) {
+  document.querySelectorAll("li button").forEach(b => b.setAttribute("aria-current", b === button));
+  history.replaceState(null, "", `#${model.id}`);
+  renderDetail(model, null);
+  const size = await show(model);
+  renderDetail(model, size);
+}
+
+const models = await (await fetch("/api/models")).json();
+const list = $("#list");
+for (const model of models) {
+  const li = document.createElement("li");
+  const b = document.createElement("button");
+  const hex = model.jobs[0]?.hex;
+  b.innerHTML = `<span class="swatch" style="background:${hex || "transparent"}"></span>
+    <span class="name">${model.id}</span><span class="kind">${model.kind || "no mesh"}</span>`;
+  b.disabled = !model.file;
+  b.addEventListener("click", () => select(model, b));
+  li.append(b);
+  list.append(li);
+}
+const first = models.find(m => m.id === location.hash.slice(1)) || models.find(m => m.file);
+const buttonFor = model => list.children[models.indexOf(model)].firstChild;
+if (first) select(first, buttonFor(first));
+else $("#status").textContent = "No models yet — add a folder under models/.";
+addEventListener("hashchange", () => {
+  const model = models.find(m => m.id === location.hash.slice(1) && m.file);
+  if (model) select(model, buttonFor(model));
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "viewer",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["scripts/view.py"],
+      "port": 8765
+    }
+  ]
+}

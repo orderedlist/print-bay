@@ -10,6 +10,8 @@ jobs/<name>.toml    model + profiles + copy count
 scripts/setup.py    install Orca, fetch the model, build profiles
 scripts/k2.py       printer CLI (status, upload, print, watch, pause...)
 scripts/run.py      slice a job with OrcaSlicer, then print it
+scripts/view.py     3D viewer for everything in models/ (localhost:8765)
+viewer/             the viewer page
 gcode/              sliced output (git-ignored)
 ```
 
@@ -54,7 +56,8 @@ python scripts/k2.py status
 python scripts/k2.py watch
 python scripts/k2.py cancel
 python scripts/k2.py slots                         # filament loaded in the CFS
+python scripts/view.py                             # browse models in 3D
 ```
 
 OpenSCAD models need `brew install --cask openscad@snapshot`; `run.py`
-renders them to STL before slicing.
+renders them to STL before slicing, and the viewer shows them upright.
