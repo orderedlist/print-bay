@@ -10,9 +10,8 @@ jobs/<name>.toml    model + profiles + copy count
 scripts/setup.py    install Orca, fetch the model, build profiles
 scripts/k2.py       printer CLI (status, upload, print, watch, pause...)
 scripts/run.py      slice a job with OrcaSlicer, then print it
-scripts/view.py     3D viewer for everything in models/ (localhost:8765)
-viewer/             the viewer page
-costs.toml          filament and power rates for the viewer's cost estimates
+app/                Print Bay: desktop/web app for the printer and the models
+costs.toml          filament and power rates for the app's cost estimates
 gcode/              sliced output (git-ignored)
 ```
 
@@ -57,12 +56,33 @@ python scripts/k2.py status
 python scripts/k2.py watch
 python scripts/k2.py cancel
 python scripts/k2.py slots                         # filament loaded in the CFS
-python scripts/view.py                             # browse models in 3D
 ```
 
-In the viewer, **Toolpaths** shows a sliced job's G-code colored by feature
-(walls, infill, skins, bridges, supports). **X-ray** fades the walls so the
-infill shows through; **This layer only** looks straight down on one layer.
-
 OpenSCAD models need `brew install --cask openscad@snapshot`; `run.py`
-renders them to STL before slicing, and the viewer shows them upright.
+renders them to STL before slicing. A job's optional `[scad]` table overrides
+the model's top-level variables (passed as `-D`), e.g. `rows = "2"`.
+
+## Print Bay app
+
+A Node/TypeScript app over the same files and printer: live camera and status,
+pause/resume/cancel, the model library with 3D previews and toolpath x-ray,
+OpenSCAD parameter editing with re-slicing, and printing with a copy queue
+(each later copy waits for you to confirm the bed is clear).
+
+```
+cd app
+npm install
+npm run desktop     # build, then open the Electron app
+npm start           # or just the server: http://localhost:8765 (also on the LAN)
+npm run dev         # server with reload + Vite on :5173
+```
+
+`app/server` (Fastify) talks to Moonraker and this repo and shells out to
+`scripts/run.py` for slicing; `app/web` is the React UI; `app/desktop` runs
+the server inside Electron. Settings come from the environment: `K2_HOST`,
+`PORT`, `BIND`, `OPENSCAD`, `PYTHON`.
+
+The K2 serves its camera over WebRTC on port 8000 and only connects when the
+offer asks for a two-way (`sendrecv`) video channel. It seems to allow one
+viewer at a time, so the app drops the connection when you leave the Printer
+screen.
