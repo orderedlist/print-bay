@@ -57,6 +57,11 @@ export class Stage {
   private paths = new THREE.Group();
   private data: Toolpaths | null = null;
   private resizer: ResizeObserver;
+  private markers = new THREE.Group();
+  private plainMaterial: THREE.Material | null = null;
+  private colorMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0 });
+  /** Called with the triangle index when the mesh is clicked (not dragged). */
+  onPick: ((triangle: number) => void) | null = null;
 
   layer = 0;
   single = false;
@@ -78,8 +83,22 @@ export class Stage {
     const edge = new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.PlaneGeometry(BED, BED)),
       new THREE.LineBasicMaterial({ color: "#4a4f55" }));
-    this.scene.add(grid, edge, this.paths);
+    this.scene.add(grid, edge, this.paths, this.markers);
     this.paths.position.set(-BED / 2, -BED / 2, 0); // G-code is in bed coordinates
+
+    // a click (not an orbit drag) on the mesh picks a triangle
+    let down: [number, number] | null = null;
+    const el = this.renderer.domElement;
+    el.addEventListener("pointerdown", (e) => { down = [e.clientX, e.clientY]; });
+    el.addEventListener("pointerup", (e) => {
+      if (!down || !this.onPick || !this.mesh?.visible) return;
+      if (Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;
+      const rect = el.getBoundingClientRect();
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1), this.camera);
+      const hit = ray.intersectObject(this.mesh)[0];
+      if (hit?.faceIndex != null) this.onPick(hit.faceIndex);
+    });
 
     this.resizer = new ResizeObserver(() => this.resize());
     this.resizer.observe(host);
@@ -112,15 +131,80 @@ export class Stage {
 
   setMesh(geometry: THREE.BufferGeometry, hex: string | null) {
     if (this.mesh) { this.scene.remove(this.mesh); this.mesh.geometry.dispose(); }
-    this.mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
-      color: displayColor(hex), roughness: 0.65, metalness: 0.05,
-    }));
+    this.plainMaterial = new THREE.MeshStandardMaterial({ color: displayColor(hex), roughness: 0.65, metalness: 0.05 });
+    this.mesh = new THREE.Mesh(geometry, this.plainMaterial);
     this.scene.add(this.mesh);
+    this.markers.clear();
+  }
+
+  get positions(): Float32Array | null {
+    return (this.mesh?.geometry.attributes.position.array as Float32Array) ?? null;
+  }
+
+  // ---- stress view ----
+
+  private colors(): THREE.BufferAttribute {
+    const g = this.mesh!.geometry;
+    if (!g.attributes.color) g.setAttribute("color", new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 3), 3));
+    return g.attributes.color as THREE.BufferAttribute;
+  }
+
+  /** Before a solve: the part in neutral grey, picked faces tinted. */
+  showRegions(holds: number[][], load: number[] | null) {
+    if (!this.mesh) return;
+    const attr = this.colors();
+    const arr = attr.array as Float32Array;
+    arr.fill(0.42);
+    const paint = (tris: number[], c: THREE.Color) => {
+      for (const t of tris) for (let v = 0; v < 3; v++) arr.set([c.r, c.g, c.b], (t * 3 + v) * 3);
+    };
+    for (const h of holds) paint(h, new THREE.Color("#3d8bfd"));
+    if (load) paint(load, new THREE.Color("#ff8a3d"));
+    attr.needsUpdate = true;
+    this.mesh.material = this.colorMaterial;
+  }
+
+  /** After a solve: blue -> teal -> yellow -> red by stress, on a square-root scale. */
+  showStress(values: Float32Array, max: number) {
+    if (!this.mesh) return;
+    const attr = this.colors();
+    const arr = attr.array as Float32Array;
+    const stops = ["#2b59c3", "#1fb3a3", "#f2d43d", "#e5484d"].map((h) => new THREE.Color(h));
+    const c = new THREE.Color();
+    for (let v = 0; v < values.length; v++) {
+      const t = Math.sqrt(Math.min(1, values[v] / (max || 1))) * (stops.length - 1);
+      const i = Math.min(stops.length - 2, Math.floor(t));
+      c.copy(stops[i]).lerp(stops[i + 1], t - i);
+      arr[v * 3] = c.r; arr[v * 3 + 1] = c.g; arr[v * 3 + 2] = c.b;
+    }
+    attr.needsUpdate = true;
+    this.mesh.material = this.colorMaterial;
+  }
+
+  setMarkers(points: { at: [number, number, number]; color: string; down?: boolean }[]) {
+    this.markers.clear();
+    const size = this.mesh ? Math.max(...this.mesh.geometry.boundingBox!.getSize(new THREE.Vector3()).toArray()) / 40 : 2;
+    for (const p of points) {
+      const pin = new THREE.Mesh(new THREE.SphereGeometry(size, 16, 12), new THREE.MeshBasicMaterial({ color: p.color, depthTest: false }));
+      pin.position.set(...p.at);
+      pin.renderOrder = 2;
+      this.markers.add(pin);
+      if (p.down) {
+        const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, -1), new THREE.Vector3(p.at[0], p.at[1], p.at[2] + size * 7), size * 6, p.color, size * 2.2, size * 1.6);
+        this.markers.add(arrow);
+      }
+    }
+  }
+
+  plainColors() {
+    if (this.mesh && this.plainMaterial) this.mesh.material = this.plainMaterial;
+    this.markers.clear();
   }
 
   showMesh() {
     if (this.mesh) this.mesh.visible = true;
     this.paths.visible = false;
+    this.markers.visible = true;
     if (!this.mesh) return;
     const size = this.mesh.geometry.boundingBox!.getSize(new THREE.Vector3());
     const r = Math.max(size.x, size.y, size.z, 60);
@@ -159,6 +243,7 @@ export class Stage {
 
   showPaths() {
     if (this.mesh) this.mesh.visible = false;
+    this.markers.visible = false;
     this.paths.visible = true;
     this.framePaths();
   }

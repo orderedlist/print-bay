@@ -196,3 +196,8 @@ dl.specs dd { margin: 0; font-variant-numeric: tabular-nums; min-width: 0; overf
 }
 .starter:hover { border-color: var(--accent); }
 .starter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.stress-ui { max-width: 460px; }
+.stress-steps { display: flex; gap: 6px; flex-wrap: wrap; }
+.stress-steps .chip { height: 36px; }
+.stress-scale { width: 120px; height: 10px; border-radius: 5px; background: linear-gradient(90deg, #2b59c3, #1fb3a3 33%, #f2d43d 66%, #e5484d); }
+select.field { padding: 0 8px; }

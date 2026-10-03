@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type * as THREE from "three";
 import { api } from "../api";
 import { FEATURE_COLORS, Stage, parseMesh, type Toolpaths } from "../stage";
+import { StressPanel } from "./StressPanel";
 import type { Model } from "../types";
 
 interface Props {
@@ -12,7 +13,8 @@ interface Props {
 export function ModelViewer({ model, onSize }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const stage = useRef<Stage | null>(null);
-  const [mode, setMode] = useState<"model" | "paths">("model");
+  const [mode, setMode] = useState<"model" | "paths" | "stress">("model");
+  const [meshVersion, setMeshVersion] = useState(0);
   const [loading, setLoading] = useState<string | null>("Loading…");
   const [paths, setPaths] = useState<Toolpaths | null>(null);
   const [, redraw] = useState(0);
@@ -33,7 +35,8 @@ export function ModelViewer({ model, onSize }: Props) {
         if (!alive || !stage.current) return;
         const { geometry, size } = parseMesh(buf);
         stage.current.setMesh(geometry, model.jobs[0]?.hex ?? null);
-        if (mode === "model") stage.current.showMesh();
+        setMeshVersion((v) => v + 1);
+        if (mode !== "paths") stage.current.showMesh();
         onSize(size);
         setLoading(null);
       })
@@ -54,9 +57,9 @@ export function ModelViewer({ model, onSize }: Props) {
   }, [pathsKey]);
 
   const s = stage.current;
-  const pick = (m: "model" | "paths") => {
+  const pick = (m: "model" | "paths" | "stress") => {
     setMode(m);
-    if (m === "model") s?.showMesh(); else s?.showPaths();
+    if (m === "paths") s?.showPaths(); else s?.showMesh();
   };
   const update = (fn: (s: Stage) => void, reframe = false) => {
     if (!s) return;
@@ -73,7 +76,9 @@ export function ModelViewer({ model, onSize }: Props) {
         <button className="chip" aria-pressed={mode === "model"} onClick={() => pick("model")}>Model</button>
         <button className="chip" aria-pressed={mode === "paths"} disabled={!paths}
           title={paths ? "" : "Slice the job to see its toolpaths"} onClick={() => pick("paths")}>Toolpaths</button>
+        <button className="chip" aria-pressed={mode === "stress"} disabled={!!loading} onClick={() => pick("stress")}>Stress</button>
       </div>
+      {mode === "stress" && s && !loading && <StressPanel key={model.id} stage={s} meshVersion={meshVersion} />}
       {mode === "paths" && paths && s && (
         <div className="paths-ui">
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
