@@ -59,7 +59,7 @@ def slice_job(job):
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     if model.suffix == ".scad":
-        model = render_scad(model, out / "model.stl")
+        model = render_scad(model, out / "model.stl", job.get("scad", {}))
     elif model.suffix == ".3mf":
         model = single_filament(model, out / "model.3mf")
 
@@ -85,9 +85,11 @@ def slice_job(job):
     return final
 
 
-def render_scad(src, dest):
+def render_scad(src, dest, params=None):
+    """Render to STL; `params` (the job's [scad] table) override top-level variables."""
     print(f"Rendering {src.relative_to(ROOT)}")
-    res = subprocess.run([OPENSCAD, "-o", str(dest), str(src)], capture_output=True, text=True)
+    overrides = [arg for k, v in (params or {}).items() for arg in ("-D", f"{k}={v}")]
+    res = subprocess.run([OPENSCAD, *overrides, "-o", str(dest), str(src)], capture_output=True, text=True)
     if res.returncode != 0 or not dest.exists():
         print(res.stderr[-2000:])
         sys.exit("OpenSCAD render failed (output above).")
