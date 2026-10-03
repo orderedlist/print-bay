@@ -40,7 +40,7 @@ Copy them into `profiles/` with the names the job file uses.
 
 ## Adding a model
 
-1. Make `models/<name>/`, drop in the file, add `SOURCE.md`.
+1. Make `models/<name>/`, drop in the file (.3mf, .stl, or .scad), add `SOURCE.md`.
 2. Copy `jobs/stacking-box.toml` to `jobs/<name>.toml` and edit it.
    `python scripts/setup.py jobs/<name>.toml` fetches anything missing.
 3. `python scripts/run.py jobs/<name>.toml --slice-only`, check the G-code
@@ -53,4 +53,8 @@ python scripts/run.py jobs/stacking-box.toml       # slice + print all copies
 python scripts/k2.py status
 python scripts/k2.py watch
 python scripts/k2.py cancel
+python scripts/k2.py slots                         # filament loaded in the CFS
 ```
+
+OpenSCAD models need `brew install --cask openscad@snapshot`; `run.py`
+renders them to STL before slicing.

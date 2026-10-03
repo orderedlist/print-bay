@@ -29,6 +29,7 @@ import k2  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 ORCA = os.environ.get("ORCA", "/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer")
+OPENSCAD = os.environ.get("OPENSCAD", "openscad")
 DONE_STATES = {"complete", "cancelled", "error"}
 COLORS = {
     "black": "#000000", "white": "#FFFFFF", "grey": "#808080", "gray": "#808080",
@@ -57,7 +58,10 @@ def slice_job(job):
     out = ROOT / "gcode" / job["name"]
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
-    model = single_filament(model, out / "model.3mf")
+    if model.suffix == ".scad":
+        model = render_scad(model, out / "model.stl")
+    elif model.suffix == ".3mf":
+        model = single_filament(model, out / "model.3mf")
 
     cmd = [
         ORCA,
@@ -79,6 +83,15 @@ def slice_job(job):
     shutil.rmtree(out, ignore_errors=True)
     print(f"G-code: {final.relative_to(ROOT)}")
     return final
+
+
+def render_scad(src, dest):
+    print(f"Rendering {src.relative_to(ROOT)}")
+    res = subprocess.run([OPENSCAD, "-o", str(dest), str(src)], capture_output=True, text=True)
+    if res.returncode != 0 or not dest.exists():
+        print(res.stderr[-2000:])
+        sys.exit("OpenSCAD render failed (output above).")
+    return dest
 
 
 def single_filament(src, dest):
