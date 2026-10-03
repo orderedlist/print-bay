@@ -40,8 +40,11 @@ function threemfToStl(src: string, dest: string) {
 
 const inflight = new Map<string, Promise<string>>();
 
-/** Path to an STL of the model; OpenSCAD models render upright with their job's overrides. */
-export function meshFor(modelId: string): Promise<string> {
+/**
+ * Path to an STL of the model with its job's overrides. OpenSCAD models render
+ * upright (as used) for viewing, or laid out as sliced with `print: true`.
+ */
+export function meshFor(modelId: string, opts: { print?: boolean } = {}): Promise<string> {
   const model = getModel(modelId);
   if (!model.file) throw Object.assign(new Error(`${modelId} has no mesh`), { statusCode: 404 });
   const src = path.join(ROOT, model.file);
@@ -49,26 +52,28 @@ export function meshFor(modelId: string): Promise<string> {
 
   const job = model.jobs[0] ? getJob(model.jobs[0].name) : null;
   const params = job?.scad ?? {};
-  const dest = path.join(CACHE, `${modelId}.stl`);
-  const stamp = path.join(CACHE, `${modelId}.stl.key`);
+  const print = Boolean(opts.print) && src.endsWith(".scad");
+  const name = print ? `${modelId}.print` : modelId;
+  const dest = path.join(CACHE, `${name}.stl`);
+  const stamp = path.join(CACHE, `${name}.stl.key`);
   const key = JSON.stringify({ mtime: fs.statSync(src).mtimeMs, params });
   if (fs.existsSync(dest) && fs.existsSync(stamp) && fs.readFileSync(stamp, "utf8") === key)
     return Promise.resolve(dest);
 
-  if (!inflight.has(modelId)) {
+  if (!inflight.has(name)) {
     const work = (async () => {
       const tmp = dest + ".tmp.stl";
       if (src.endsWith(".scad")) {
         const defs = Object.entries(params).flatMap(([k, v]) => ["-D", `${k}=${v}`]);
-        await run(OPENSCAD, ["-D", "upright=true", ...defs, "-o", tmp, src], { maxBuffer: 1 << 24 });
+        await run(OPENSCAD, [...(print ? [] : ["-D", "upright=true"]), ...defs, "-o", tmp, src], { maxBuffer: 1 << 24 });
       } else {
         threemfToStl(src, tmp);
       }
       fs.renameSync(tmp, dest);
       fs.writeFileSync(stamp, key);
       return dest;
-    })().finally(() => inflight.delete(modelId));
-    inflight.set(modelId, work);
+    })().finally(() => inflight.delete(name));
+    inflight.set(name, work);
   }
-  return inflight.get(modelId)!;
+  return inflight.get(name)!;
 }

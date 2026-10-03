@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import { CACHE, CLAUDE, OPENSCAD, ROOT } from "./config.js";
 import { publish } from "./events.js";
 import { listJobs } from "./jobs.js";
+import { checkModel } from "./modelchecks.js";
 
 export type Entry =
   | { role: "user"; text: string; uploads: string[] }
@@ -185,6 +186,8 @@ OpenSCAD conventions (the app depends on these):
   Thin plate-like walls in 1.8 mm (two perimeters a side); keep solid members compact (the slicer prints them as shells).
 - End with an echo of the overall size, e.g. echo(str("Size ", W, " x ", D, " x ", H, " mm")).
 - After every change, render to check it: ${OPENSCAD} -o /tmp/print-bay-check.stl <file>  (read the ECHO and any WARNING/ERROR).
+- Then run the printability checks on the model as it will be sliced: node app/server/dist/check-cli.js <model-folder-name>
+  (overhangs, thin walls, separate pieces, bed contact, warping, tipping, build volume). Fix FAILs; fix or explain WARNs.
 
 Design rules for parts that print and hold up (FDM, PLA):
 - Dimensions: never guess one the user can measure. Ask for all of them once, in one batch. Photos show shape and
@@ -225,7 +228,8 @@ Render to verify, then tell the user it's ready and what they can tweak.`;
 }
 
 function allowedTools(s: AgentSession): string[] {
-  const read = ["Read", "Glob", "Grep", `Bash(${OPENSCAD}:*)`, "Bash(openscad:*)"];
+  const read = ["Read", "Glob", "Grep", `Bash(${OPENSCAD}:*)`, "Bash(openscad:*)",
+    "Bash(node app/server/dist/check-cli.js:*)", `Bash(node ${ROOT}/app/server/dist/check-cli.js:*)`];
   if (s.kind === "edit") {
     const m = `models/${s.modelId}`;
     return [...read, `Edit(${m}/**)`, `Write(${m}/**)`, ...(s.job ? [`Edit(jobs/${s.job}.toml)`] : [])];
@@ -247,7 +251,8 @@ function toolLabel(name: string, input: any): string {
 
 // ---- running a turn ----
 
-export function send(id: string, text: string, uploads: string[] = []): AgentSession {
+/** `shown` replaces the text in the transcript (for canned prompts like reviews). */
+export function send(id: string, text: string, uploads: string[] = [], shown?: string): AgentSession {
   const s = getSession(id);
   if (s.running) throw fail("Claude is still working on the last message", 409);
   if (!text.trim() && !uploads.length) throw fail("Say what to change");
@@ -255,7 +260,7 @@ export function send(id: string, text: string, uploads: string[] = []): AgentSes
 
   s.turns++;
   snapshot(s, s.turns);
-  s.transcript.push({ role: "user", text, uploads });
+  s.transcript.push({ role: "user", text: shown ?? text, uploads });
   s.running = true;
   emit(s, true);
 
@@ -346,6 +351,37 @@ export function send(id: string, text: string, uploads: string[] = []): AgentSes
     finish();
   });
   return s;
+}
+
+/**
+ * "Analyze and correct": a code-review style pass over the model. The rules come
+ * from the brief, so improvements to it apply here automatically; the current
+ * check results are included so the review starts from facts.
+ */
+export async function review(id: string): Promise<AgentSession> {
+  const s = getSession(id);
+  if (s.kind !== "edit" || !s.modelId) throw fail("Reviews run on an existing model", 400);
+  let findings = "Couldn't run the checks; run them yourself first.";
+  try {
+    const r = await checkModel(s.modelId);
+    findings = r.findings.length
+      ? r.findings.map((f) => `- ${f.severity.toUpperCase()} ${f.rule}: ${f.message} (${f.detail})`).join("\n")
+      : "- No findings.";
+  } catch { /* the agent runs them itself */ }
+  const prompt = `Analyze and correct this model, like a code review.
+
+Current printability checks (as it will be sliced):
+${findings}
+
+1. Read the .scad, SOURCE.md and the job file. Review the design against every rule in your instructions:
+   dimensions and assumptions, walls, overhangs and bridges, holes (teardrops when horizontal), fits, fasteners,
+   strength and load path, warping, print orientation, finish, and whether the parameters stay editable.
+2. Reply first with a short review: **Must fix**, **Should fix**, **Fine as is**, one line each, naming the rule.
+3. Fix the must-fix and should-fix items. Don't change measured dimensions or what the part is for; if a fix
+   needs my decision, ask instead of guessing.
+4. Re-render and re-run the checks until they're clean, or explain any finding you're leaving.
+5. Summarize what changed and what's left, and add a dated "Review" note to SOURCE.md.`;
+  return send(id, prompt, [], "Analyze and correct");
 }
 
 export function stop(id: string) {

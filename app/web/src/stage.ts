@@ -54,6 +54,7 @@ export class Stage {
   readonly camera = new THREE.PerspectiveCamera(35, 1, 1, 5000);
   readonly controls: OrbitControls;
   private mesh: THREE.Mesh | null = null;
+  private layout: THREE.Mesh | null = null; // the part as it will print
   private paths = new THREE.Group();
   private data: Toolpaths | null = null;
   private resizer: ResizeObserver;
@@ -183,7 +184,8 @@ export class Stage {
 
   setMarkers(points: { at: [number, number, number]; color: string; down?: boolean }[]) {
     this.markers.clear();
-    const size = this.mesh ? Math.max(...this.mesh.geometry.boundingBox!.getSize(new THREE.Vector3()).toArray()) / 40 : 2;
+    const ref = this.layout?.visible ? this.layout : this.mesh;
+    const size = ref ? Math.max(1.5, Math.max(...ref.geometry.boundingBox!.getSize(new THREE.Vector3()).toArray()) / 30) : 2;
     for (const p of points) {
       const pin = new THREE.Mesh(new THREE.SphereGeometry(size, 16, 12), new THREE.MeshBasicMaterial({ color: p.color, depthTest: false }));
       pin.position.set(...p.at);
@@ -201,7 +203,30 @@ export class Stage {
     this.markers.clear();
   }
 
+  setLayoutMesh(geometry: THREE.BufferGeometry, hex: string | null) {
+    if (this.layout) { this.scene.remove(this.layout); this.layout.geometry.dispose(); }
+    this.layout = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: displayColor(hex), roughness: 0.65, transparent: true, opacity: 0.85 }));
+    this.layout.visible = false;
+    this.scene.add(this.layout);
+  }
+
+  /** The part laid out on the bed as sliced, with pins at check findings. */
+  showLayout(pins: { at: [number, number, number]; color: string }[]) {
+    if (this.mesh) this.mesh.visible = false;
+    this.paths.visible = false;
+    if (!this.layout) return;
+    this.layout.visible = true;
+    this.markers.visible = true;
+    this.setMarkers(pins);
+    const size = this.layout.geometry.boundingBox!.getSize(new THREE.Vector3());
+    const r = Math.max(size.x, size.y, size.z, 60);
+    this.camera.position.set(-r * 1.4, -r * 1.9, size.z / 2 + r * 1.1);
+    this.controls.target.set(0, 0, size.z / 2);
+    this.controls.update();
+  }
+
   showMesh() {
+    if (this.layout) this.layout.visible = false;
     if (this.mesh) this.mesh.visible = true;
     this.paths.visible = false;
     this.markers.visible = true;
@@ -242,6 +267,7 @@ export class Stage {
   }
 
   showPaths() {
+    if (this.layout) this.layout.visible = false;
     if (this.mesh) this.mesh.visible = false;
     this.markers.visible = false;
     this.paths.visible = true;

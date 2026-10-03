@@ -43,6 +43,15 @@ export interface SliceEvent { job: string; state: "running" | "done" | "failed";
 
 export const IDLE_STATES = new Set(["standby", "complete", "cancelled", "error"]);
 
+export interface Finding {
+  rule: string;
+  severity: "fail" | "warn" | "info";
+  message: string;
+  detail: string;
+  at: [number, number, number];
+}
+export interface CheckReport { findings: Finding[]; size: [number, number, number]; triangles: number; supports: boolean }
+
 export type AgentEntry =
   | { role: "user"; text: string; uploads: string[] }
   | { role: "assistant"; text: string }

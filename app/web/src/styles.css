@@ -201,3 +201,9 @@ dl.specs dd { margin: 0; font-variant-numeric: tabular-nums; min-width: 0; overf
 .stress-steps .chip { height: 36px; }
 .stress-scale { width: 120px; height: 10px; border-radius: 5px; background: linear-gradient(90deg, #2b59c3, #1fb3a3 33%, #f2d43d 66%, #e5484d); }
 select.field { padding: 0 8px; }
+.finding {
+  display: flex; gap: 10px; align-items: flex-start; text-align: left; background: none; border: 0; padding: 6px 4px;
+  border-radius: 8px; cursor: pointer; color: var(--ink); font-size: 13px; line-height: 1.4;
+}
+.finding:hover { background: #222528; }
+.finding .dot { flex: none; }

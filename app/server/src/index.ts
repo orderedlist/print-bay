@@ -8,6 +8,7 @@ import { CAMERA_URL, HOST, K2_HOST, PORT, WEB_DIST } from "./config.js";
 import { bus, publish } from "./events.js";
 import { getJob, listModels, rates, scadParams, setScadParams } from "./jobs.js";
 import { meshFor } from "./mesh.js";
+import { checkModel } from "./modelchecks.js";
 import { toolpathsFor } from "./gcode.js";
 import * as moonraker from "./moonraker.js";
 import { getQueue, print, removeEntry, startNext } from "./printing.js";
@@ -48,6 +49,11 @@ export async function start(opts: StartOptions = {}) {
     const file = await meshFor(req.params.id);
     return reply.type("model/stl").header("Cache-Control", "no-store").send(fs.createReadStream(file));
   });
+  app.get<{ Params: { id: string } }>("/api/models/:id/print-mesh", async (req, reply) => {
+    const file = await meshFor(req.params.id, { print: true });
+    return reply.type("model/stl").header("Cache-Control", "no-store").send(fs.createReadStream(file));
+  });
+  app.get<{ Params: { id: string } }>("/api/models/:id/checks", async (req) => checkModel(req.params.id));
   app.get<{ Params: { job: string } }>("/api/jobs/:job/toolpaths", async (req, reply) => {
     const body = toolpathsFor(getJob(req.params.job).name);
     if (!body) return reply.status(404).send({ error: "Not sliced yet" });
@@ -84,6 +90,7 @@ export async function start(opts: StartOptions = {}) {
   app.get<{ Params: { id: string } }>("/api/models/:id/agent", async (req) => agent.latestFor(req.params.id));
   app.post<{ Params: { id: string }; Body: { text: string; uploads?: string[] } }>("/api/agent/:id/messages", async (req) =>
     agent.send(req.params.id, req.body.text ?? "", req.body.uploads ?? []));
+  app.post<{ Params: { id: string } }>("/api/agent/:id/review", async (req) => agent.review(req.params.id));
   app.post<{ Params: { id: string } }>("/api/agent/:id/stop", async (req) => agent.stop(req.params.id));
   app.post<{ Params: { id: string } }>("/api/agent/:id/undo", async (req) => agent.undo(req.params.id));
   app.post<{ Params: { id: string }; Body: Buffer }>("/api/agent/:id/uploads", async (req) =>

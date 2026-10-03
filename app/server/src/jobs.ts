@@ -195,3 +195,9 @@ export function setScadParams(job: Job, values: Record<string, string>): void {
   }
   fs.writeFileSync(file, next);
 }
+
+/** Whether the job's slicer settings turn supports on. */
+export function supportsOn(job: Job): boolean {
+  const data = parse(fs.readFileSync(abs(job.file), "utf8")) as any;
+  return String(data.overrides?.process?.enable_support ?? "0") === "1";
+}

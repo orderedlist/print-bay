@@ -2,7 +2,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import type * as THREE from "three";
 import { api, inches, mm, money, title, useAgentSession, type Live } from "../api";
 import { AgentPanel } from "../components/AgentPanel";
-import type { AgentSession } from "../types";
+import type { AgentSession, CheckReport } from "../types";
+import { SEVERITY_COLORS } from "../components/ModelViewer";
 import { ModelViewer } from "../components/ModelViewer";
 import type { Model, ScadParam } from "../types";
 
@@ -52,13 +53,36 @@ export function ModelDetail({ model, live, back, print, toast }: Props) {
   const session = useAgentSession(agentId, live);
   const canEdit = model.kind === "scad";
 
-  const openAgent = async (fresh = false) => {
+  const openAgent = async (fresh = false): Promise<AgentSession | null> => {
     setAgentOpen(true);
     try {
       const existing = fresh ? null : await api<AgentSession | null>(`/api/models/${model.id}/agent`);
       const s = existing ?? await api<AgentSession>("/api/agent", { method: "POST", json: { kind: "edit", modelId: model.id } });
       setAgentId(s.id);
-    } catch (e) { toast((e as Error).message, true); }
+      return s;
+    } catch (e) { toast((e as Error).message, true); return null; }
+  };
+
+  // printability checks on the model as it will be sliced
+  const [checks, setChecks] = useState<CheckReport | null>(null);
+  const [checking, setChecking] = useState(true);
+  const [layoutSignal, setLayoutSignal] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    setChecking(true);
+    api<CheckReport>(`/api/models/${model.id}/checks`)
+      .then((r) => alive && setChecks(r))
+      .catch(() => alive && setChecks(null))
+      .finally(() => alive && setChecking(false));
+    return () => { alive = false; };
+  }, [model.id, model.meshKey, live.modelsVersion]);
+
+  /** "Analyze and correct": a review pass by Claude using every rule it knows plus the checks. */
+  const analyze = async () => {
+    const s = await openAgent();
+    if (!s) return;
+    if (s.running) { toast("Claude is still working on the last message", true); return; }
+    api(`/api/agent/${s.id}/review`, { method: "POST" }).catch((e) => toast(e.message, true));
   };
   const log = job ? live.slice[job.name] ?? [] : [];
   const slicing = job?.slicing || log.at(-1)?.state === "running";
@@ -94,7 +118,7 @@ export function ModelDetail({ model, live, back, print, toast }: Props) {
           Edit with Claude</button>}
       </div>
       <div className="split">
-        <section className="wide"><ModelViewer model={model} onSize={setSize} /></section>
+        <section className="wide"><ModelViewer model={model} onSize={setSize} checks={checks} showLayoutSignal={layoutSignal} /></section>
         <aside className="side">
           <div className="card card-pad" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div>
@@ -151,6 +175,29 @@ export function ModelDetail({ model, live, back, print, toast }: Props) {
               <div className="faint" style={{ fontSize: 12 }}>• overridden in {job?.file}. Hover a field for its note.</div>
             </div>
           )}
+
+          <div className="card card-pad" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div className="card-head" style={{ marginBottom: 0 }}>
+              <h2 style={{ fontSize: 15 }}>Print checks</h2>
+              <span className="muted" style={{ fontSize: 12 }}>
+                {checking ? "checking…" : checks ? `${checks.findings.filter((f) => f.severity !== "info").length || "no"} issues` : "unavailable"}
+              </span>
+            </div>
+            {checks && checks.findings.length === 0 && <div className="muted">No overhangs, thin walls, loose pieces or bed problems found.</div>}
+            {checks?.findings.map((f, i) => (
+              <button key={i} className="finding" onClick={() => setLayoutSignal((n) => n + 1)} title={`${f.rule}: ${f.detail}`}>
+                <i className="dot" style={{ background: SEVERITY_COLORS[f.severity], marginTop: 6 }} />
+                <span>{f.message}</span>
+              </button>
+            ))}
+            {canEdit && (
+              <button className="btn" disabled={session?.running} onClick={analyze}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" /></svg>
+                Analyze and correct
+              </button>
+            )}
+            {canEdit && <div className="faint" style={{ fontSize: 12 }}>Claude reviews the model against its design rules and these checks, then fixes what it can. Undo is in the sidebar.</div>}
+          </div>
 
           {model.source && <div className="card card-pad"><Source text={model.source} /></div>}
         </aside>

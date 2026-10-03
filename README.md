@@ -94,6 +94,20 @@ snapshotted under `.cache/app/agent/`, so **Undo last change** restores the
 files exactly. New-model chats take photos (button, drag and drop, or paste).
 Set `CLAUDE` if the CLI isn't at `~/.local/bin/claude`.
 
+**Print checks** run on each model as it will be sliced: separate pieces,
+build volume, overhangs past 45° (short flat bridges allowed; info only when
+supports are on), walls under 1 mm, bed contact, warping and tipping. Run them
+yourself with `node app/server/dist/check-cli.js <model>`. **Layout** in the
+viewer shows the part laid out on the bed with a pin at each finding.
+**Analyze and correct** has Claude review a model against its design rules
+(the same brief the chats use, so new rules apply automatically) and the
+checks, then fix what it can and note the review in `SOURCE.md`.
+
+**Stress** colors the model by stress under a load: click where the weight
+presses and what holds it (or let it auto-aim), pick kilograms and a material,
+and it solves a voxel finite-element model in the browser (`npm test` checks
+it against beam theory).
+
 The K2 serves its camera over WebRTC on port 8000 and only connects when the
 offer asks for a two-way (`sendrecv`) video channel. It seems to allow one
 viewer at a time, so the app drops the connection when you leave the Printer
