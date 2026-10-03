@@ -1,0 +1,101 @@
+// Print Bay server: a typed API over the printer and this repo, plus the web UI.
+// Exported as start() so the Electron shell can run it in-process.
+import fs from "node:fs";
+import Fastify from "fastify";
+import fastifyStatic from "@fastify/static";
+import { CAMERA_URL, HOST, K2_HOST, PORT, WEB_DIST } from "./config.js";
+import { bus, publish } from "./events.js";
+import { getJob, listModels, rates, scadParams, setScadParams } from "./jobs.js";
+import { meshFor } from "./mesh.js";
+import { toolpathsFor } from "./gcode.js";
+import * as moonraker from "./moonraker.js";
+import { getQueue, print, removeEntry, startNext } from "./printing.js";
+import { isSlicing, slice } from "./slice.js";
+
+export interface StartOptions { port?: number; host?: string; quiet?: boolean }
+
+export async function start(opts: StartOptions = {}) {
+  const app = Fastify({ logger: !opts.quiet && { level: "warn" } });
+  let status = await moonraker.getStatus();
+
+  const poll = setInterval(async () => {
+    status = await moonraker.getStatus();
+    publish("status", status);
+  }, 2000);
+  app.addHook("onClose", async () => clearInterval(poll));
+
+  app.setErrorHandler((err: Error & { statusCode?: number }, _req, reply) => {
+    reply.status(err.statusCode ?? 500).send({ error: err.message });
+  });
+
+  // ---- printer ----
+  app.get("/api/printer", async () => ({ host: K2_HOST, camera: CAMERA_URL }));
+  app.get("/api/status", async () => status);
+  for (const action of ["pause", "resume", "cancel"] as const) {
+    app.post(`/api/printer/${action}`, async () => {
+      await moonraker[action]();
+      return { ok: true };
+    });
+  }
+
+  // ---- models and jobs ----
+  app.get("/api/rates", async () => rates());
+  app.get("/api/models", async () =>
+    listModels().map((m) => ({ ...m, jobs: m.jobs.map((j) => ({ ...j, slicing: isSlicing(j.name) })) })));
+  app.get<{ Params: { id: string } }>("/api/models/:id/mesh", async (req, reply) => {
+    const file = await meshFor(req.params.id);
+    return reply.type("model/stl").header("Cache-Control", "no-store").send(fs.createReadStream(file));
+  });
+  app.get<{ Params: { job: string } }>("/api/jobs/:job/toolpaths", async (req, reply) => {
+    const body = toolpathsFor(getJob(req.params.job).name);
+    if (!body) return reply.status(404).send({ error: "Not sliced yet" });
+    return reply.type("application/octet-stream").send(body);
+  });
+  app.get<{ Params: { job: string } }>("/api/jobs/:job/params", async (req) => scadParams(getJob(req.params.job)));
+  app.put<{ Params: { job: string }; Body: { values: Record<string, string> } }>("/api/jobs/:job/params", async (req) => {
+    const job = getJob(req.params.job);
+    setScadParams(job, req.body.values ?? {});
+    publish("models", null);
+    return scadParams(getJob(job.name));
+  });
+  app.post<{ Params: { job: string } }>("/api/jobs/:job/slice", async (req, reply) => {
+    const job = getJob(req.params.job);
+    slice(job.name).catch(() => {}); // progress and failure arrive over SSE
+    return reply.status(202).send({ ok: true });
+  });
+
+  // ---- printing ----
+  app.post<{ Body: { job: string; color: string; copies: number; startNow: boolean } }>("/api/print", async (req) =>
+    print(req.body));
+  app.get("/api/queue", async () => getQueue());
+  app.post("/api/queue/next", async () => startNext());
+  app.delete<{ Params: { id: string } }>("/api/queue/:id", async (req) => {
+    removeEntry(req.params.id);
+    return getQueue();
+  });
+
+  // ---- live events ----
+  app.get("/api/events", (req, reply) => {
+    reply.hijack();
+    const res = reply.raw;
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
+    const send = (e: { type: string; data: unknown }) => res.write(`event: ${e.type}\ndata: ${JSON.stringify(e.data)}\n\n`);
+    send({ type: "status", data: status });
+    send({ type: "queue", data: getQueue() });
+    bus.on("event", send);
+    const ping = setInterval(() => res.write(": ping\n\n"), 25_000);
+    req.raw.on("close", () => { bus.off("event", send); clearInterval(ping); });
+  });
+
+  // ---- web UI ----
+  if (fs.existsSync(WEB_DIST)) {
+    await app.register(fastifyStatic, { root: WEB_DIST });
+    app.setNotFoundHandler((req, reply) =>
+      req.url.startsWith("/api/") ? reply.status(404).send({ error: "Not found" }) : reply.sendFile("index.html"));
+  }
+
+  const port = opts.port ?? PORT;
+  const host = opts.host ?? HOST;
+  await app.listen({ port, host });
+  return { app, url: `http://localhost:${port}` };
+}

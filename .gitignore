@@ -4,3 +4,6 @@ __pycache__/
 .venv/
 .DS_Store
 .cache/
+app/node_modules/
+app/server/dist/
+app/web/dist/

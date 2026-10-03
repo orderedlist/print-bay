@@ -2,9 +2,9 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "viewer",
-      "runtimeExecutable": ".venv/bin/python",
-      "runtimeArgs": ["scripts/view.py"],
+      "name": "app",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "app", "start"],
       "port": 8765
     }
   ]
