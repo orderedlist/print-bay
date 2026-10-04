@@ -29,8 +29,25 @@ export function displayColor(hex: string | null): THREE.Color {
   return c;
 }
 
-export function parseMesh(buffer: ArrayBuffer): { geometry: THREE.BufferGeometry; size: THREE.Vector3 } {
+/**
+ * `partHexes` colours a multi-colour mesh from the server, whose triangles carry
+ * their part number (1, 2, ...) in the STL attribute bytes. The colours land in
+ * geometry.userData.partColors (per vertex), which the stage paints with.
+ */
+export function parseMesh(buffer: ArrayBuffer, partHexes: string[] = []): { geometry: THREE.BufferGeometry; size: THREE.Vector3 } {
   const geometry = new STLLoader().parse(buffer);
+  const view = new DataView(buffer);
+  const n = buffer.byteLength >= 84 ? view.getUint32(80, true) : 0;
+  if (partHexes.length > 1 && 84 + n * 50 === buffer.byteLength && geometry.attributes.position.count === n * 3) {
+    const palette = partHexes.map((h) => displayColor(h));
+    const colors = new Float32Array(n * 9);
+    for (let t = 0; t < n; t++) {
+      const c = palette[(view.getUint16(84 + t * 50 + 48, true) || 1) - 1] ?? palette[0];
+      for (let v = 0; v < 3; v++) colors.set([c.r, c.g, c.b], (t * 3 + v) * 3);
+    }
+    geometry.userData.partColors = colors;
+    geometry.setAttribute("color", new THREE.BufferAttribute(colors.slice(), 3));
+  }
   geometry.computeBoundingBox();
   const box = geometry.boundingBox!;
   const center = box.getCenter(new THREE.Vector3());
@@ -154,7 +171,9 @@ export class Stage {
 
   setMesh(geometry: THREE.BufferGeometry, hex: string | null) {
     if (this.mesh) { this.scene.remove(this.mesh); this.mesh.geometry.dispose(); }
-    this.plainMaterial = new THREE.MeshStandardMaterial({ color: displayColor(hex), roughness: 0.65, metalness: 0.05 });
+    this.plainMaterial = geometry.userData.partColors
+      ? new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.65, metalness: 0.05 })
+      : new THREE.MeshStandardMaterial({ color: displayColor(hex), roughness: 0.65, metalness: 0.05 });
     this.mesh = new THREE.Mesh(geometry, this.plainMaterial);
     this.scene.add(this.mesh);
     this.markers.clear();
@@ -221,13 +240,21 @@ export class Stage {
   }
 
   plainColors() {
+    const parts = this.mesh?.geometry.userData.partColors as Float32Array | undefined;
+    if (parts) { // stress and picking paint over the part colours; put them back
+      const attr = this.colors();
+      (attr.array as Float32Array).set(parts);
+      attr.needsUpdate = true;
+    }
     if (this.mesh && this.plainMaterial) this.mesh.material = this.plainMaterial;
     this.markers.clear();
   }
 
   setLayoutMesh(geometry: THREE.BufferGeometry, hex: string | null) {
     if (this.layout) { this.scene.remove(this.layout); this.layout.geometry.dispose(); }
-    this.layout = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: displayColor(hex), roughness: 0.65, transparent: true, opacity: 0.85 }));
+    this.layout = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+      ...(geometry.userData.partColors ? { vertexColors: true } : { color: displayColor(hex) }), roughness: 0.65, transparent: true, opacity: 0.85,
+    }));
     this.layout.visible = false;
     this.scene.add(this.layout);
   }
@@ -357,17 +384,18 @@ export class Stage {
 let thumbRenderer: THREE.WebGLRenderer | null = null;
 const thumbs = new Map<string, Promise<{ url: string; size: THREE.Vector3 }>>();
 
-export function thumbnail(key: string, meshUrl: string, hex: string | null) {
+export function thumbnail(key: string, meshUrl: string, hex: string | null, partHexes: string[] = []) {
   if (!thumbs.has(key)) {
     thumbs.set(key, (async () => {
       const res = await fetch(meshUrl);
       if (!res.ok) throw new Error(await res.text());
-      const { geometry, size } = parseMesh(await res.arrayBuffer());
+      const { geometry, size } = parseMesh(await res.arrayBuffer(), partHexes);
       thumbRenderer ??= new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: true });
       thumbRenderer.setSize(560, 400, false);
       const scene = new THREE.Scene();
       addLights(scene);
-      const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: displayColor(hex), roughness: 0.65 }));
+      const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial(
+        geometry.userData.partColors ? { vertexColors: true, roughness: 0.65 } : { color: displayColor(hex), roughness: 0.65 }));
       scene.add(mesh);
       const camera = new THREE.PerspectiveCamera(30, 560 / 400, 1, 5000);
       camera.up.set(0, 0, 1);

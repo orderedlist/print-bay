@@ -9,7 +9,7 @@ export function Thumb({ model }: { model: Model }) {
     let alive = true;
     setUrl(null);
     if (!model.file) return;
-    thumbnail(model.meshKey, `/api/models/${model.id}/mesh`, model.jobs[0]?.hex ?? null)
+    thumbnail(model.meshKey, `/api/models/${model.id}/mesh`, model.jobs[0]?.hex ?? null, model.jobs[0]?.parts.map((p) => p.hex))
       .then((t) => alive && setUrl(t.url))
       .catch(() => alive && setFailed(true));
     return () => { alive = false; };

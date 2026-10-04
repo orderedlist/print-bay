@@ -19,7 +19,11 @@ export interface Job {
   copies: number;
   profiles: Record<string, string>;
   scad: Record<string, string>;
+  /** Multi-colour OpenSCAD jobs: each part renders with -D part="<name>" and prints on filament 1, 2, ... in order. */
+  parts: { name: string; color: string }[];
 }
+
+export const hexFor = (color: string) => COLORS[color.toLowerCase()] ?? (color.startsWith("#") ? color : `#${color}`);
 
 export interface Rates { filament_per_kg: number; printer_watts: number; power_per_kwh: number }
 export interface Cost { filament: number; power: number; total: number }
@@ -30,6 +34,7 @@ export interface ModelJob {
   file: string;
   color: string | null;
   hex: string | null;
+  parts: { name: string; color: string; hex: string }[]; // empty: one colour
   copies: number;
   stats: Stats | null;
   stale: boolean; // model, job or profiles changed since the last slice
@@ -59,6 +64,7 @@ export function listJobs(): Job[] {
       copies: data.copies ?? 1,
       profiles: data.profiles ?? {},
       scad: Object.fromEntries(Object.entries(data.scad ?? {}).map(([k, v]) => [k, String(v)])),
+      parts: Object.entries(data.parts ?? {}).map(([name, color]) => ({ name, color: String(color) })),
     };
   });
 }
@@ -131,13 +137,14 @@ export function listModels(): Model[] {
         id,
         file: mesh,
         kind: mesh ? path.extname(mesh).slice(1) : null,
-        meshKey: mesh ? `${id}:${mtime(abs(mesh))}:${JSON.stringify(modelJobs[0]?.scad ?? {})}` : id,
+        meshKey: mesh ? `${id}:${mtime(abs(mesh))}:${JSON.stringify([modelJobs[0]?.scad ?? {}, modelJobs[0]?.parts ?? []])}` : id,
         source: fs.existsSync(sourceFile) ? fs.readFileSync(sourceFile, "utf8") : "",
         jobs: modelJobs.map((j) => ({
           name: j.name,
           file: j.file,
           color: j.color ?? null,
-          hex: j.color ? COLORS[j.color.toLowerCase()] ?? j.color : null,
+          hex: j.parts[0] ? hexFor(j.parts[0].color) : j.color ? hexFor(j.color) : null,
+          parts: j.parts.map((p) => ({ ...p, hex: hexFor(p.color) })),
           copies: j.copies,
           stats: gcodeStats(j.name, r),
           stale: isStale(j),

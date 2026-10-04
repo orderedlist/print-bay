@@ -56,7 +56,7 @@ export function ModelViewer({ model, mode, setMode, theme, shift, onSize, onAvai
     api<ArrayBuffer>(`/api/models/${model.id}/mesh`)
       .then((buf) => {
         if (!alive) return;
-        const { geometry, size } = parseMesh(buf);
+        const { geometry, size } = parseMesh(buf, model.jobs[0]?.parts.map((p) => p.hex));
         stage.setMesh(geometry, model.jobs[0]?.hex ?? null);
         setMeshVersion((v) => v + 1);
         if (modeRef.current === "model" || modeRef.current === "stress") stage.showMesh();
@@ -88,7 +88,7 @@ export function ModelViewer({ model, mode, setMode, theme, shift, onSize, onAvai
     api<ArrayBuffer>(`/api/models/${model.id}/print-mesh`)
       .then((buf) => {
         if (!alive) return;
-        stage.setLayoutMesh(parseMesh(buf).geometry, model.jobs[0]?.hex ?? null);
+        stage.setLayoutMesh(parseMesh(buf, model.jobs[0]?.parts.map((p) => p.hex)).geometry, model.jobs[0]?.hex ?? null);
         setLayoutReady(true);
       })
       .catch(() => {});

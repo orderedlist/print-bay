@@ -153,14 +153,23 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
 
   // ---- printing ----
   const slots = status?.slots ?? [];
-  const [slot, setSlot] = useState<string | null>(null);
+  // one spool per colour: the whole job, or each part of a multi-colour job
+  const colorways = job?.parts.length ? job.parts.map((p) => ({ key: p.name, label: p.name, hex: p.hex }))
+    : [{ key: "", label: "", hex: job?.hex ?? null }];
+  const multi = colorways.length > 1;
+  const [picked, setPicked] = useState<Record<string, string>>({});
   const [copies, setCopies] = useState(job?.copies ?? 1);
   const [confirm, setConfirm] = useState(false);
   const [sending, setSending] = useState(false);
   useEffect(() => { // default to the spool nearest the job's color, once the printer reports them
-    if (!slot && slots.length) setSlot(nearest(job?.hex ?? null, slots));
-  }, [slot, slots, job?.hex]);
-  const chosen = slots.find((s) => s.slot === slot);
+    const missing = colorways.filter((c) => !picked[c.key]);
+    if (missing.length && slots.length)
+      setPicked((p) => ({ ...p, ...Object.fromEntries(missing.map((c) => [c.key, nearest(c.hex, slots)!])) }));
+  }, [slots, job?.name, job?.hex, job?.parts.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  const chosenFor = (key: string) => slots.find((s) => s.slot === picked[key]);
+  const chosenAll = colorways.map((c) => chosenFor(c.key));
+  const chosen = chosenAll.every(Boolean) ? chosenAll[0] : undefined;
+  const colorsText = chosenAll.map((c) => (c ? colorName(c.color).toLowerCase() : "?")).join(" and ");
   const idle = status ? IDLE_STATES.has(status.state) : false;
   const stats = job?.stats;
   const submit = async (startNow: boolean) => {
@@ -169,9 +178,11 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
     setSending(true);
     try {
       const r = await api<{ started: boolean; queued: number }>("/api/print", {
-        method: "POST", json: { job: job.name, color: chosen.color, copies, startNow },
+        method: "POST", json: multi
+          ? { job: job.name, colors: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.color])), copies, startNow }
+          : { job: job.name, color: chosen.color, copies, startNow },
       });
-      const what = `${title(model.id)} in ${colorName(chosen.color).toLowerCase()}`;
+      const what = `${title(model.id)} in ${colorsText}`;
       toast(r.started
         ? `Started ${what}.${r.queued ? ` ${r.queued} more ${r.queued === 1 ? "copy" : "copies"} queued.` : ""}`
         : `Queued ${r.queued} × ${what}.`);
@@ -262,14 +273,29 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
               </div>
             </Section>
 
-            <Section label="Filament">
+            <Section label={multi ? `Filament · ${colorways.length} colours` : "Filament"}>
               {slots.length ? (
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }} role="radiogroup" aria-label="Filament">
-                  {slots.map((s) => (
-                    <button key={s.slot} className="sw" role="radio" aria-checked={s.slot === slot} style={{ background: s.color }}
-                      onClick={() => setSlot(s.slot)} aria-label={`${colorName(s.color)} in ${s.slot}, ${s.remain}% left`} title={`${colorName(s.color)} · ${s.slot} · ${s.remain}%`} />
-                  ))}
-                  <span className="muted" style={{ marginLeft: "auto" }}>{chosen ? `${colorName(chosen.color)} · ${chosen.slot}` : ""}</span>
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {colorways.map((c) => {
+                    const pick = chosenFor(c.key);
+                    return (
+                      <div key={c.key} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {multi && <div style={{ display: "flex", justifyContent: "space-between" }}>
+                          <span style={{ fontWeight: 500 }}>{c.label.replace(/^./, (x) => x.toUpperCase())}</span>
+                          <span className="muted">{pick ? `${colorName(pick.color)} · ${pick.slot}` : ""}</span>
+                        </div>}
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }} role="radiogroup" aria-label={multi ? `Filament for ${c.label}` : "Filament"}>
+                          {slots.map((s) => (
+                            <button key={s.slot} className="sw" role="radio" aria-checked={s.slot === picked[c.key]} style={{ background: s.color }}
+                              onClick={() => setPicked((p) => ({ ...p, [c.key]: s.slot }))}
+                              aria-label={`${colorName(s.color)} in ${s.slot}, ${s.remain}% left`} title={`${colorName(s.color)} · ${s.slot} · ${s.remain}%`} />
+                          ))}
+                          {!multi && <span className="muted" style={{ marginLeft: "auto" }}>{pick ? `${colorName(pick.color)} · ${pick.slot}` : ""}</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {multi && <div className="faint" style={{ fontSize: 12 }}>One print: the CFS swaps colour within each layer, so it comes off the bed as one piece.</div>}
                 </div>
               ) : <div className="muted">The printer reports no spools{status?.online ? "" : " (offline)"}.</div>}
             </Section>
@@ -380,7 +406,7 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
           <div className="panel dialog" role="dialog" aria-modal="true" aria-labelledby="bed-clear" onClick={(e) => e.stopPropagation()}>
             <h2 id="bed-clear">Is the bed clear?</h2>
             <div className="muted">
-              {title(model.id)} in {chosen ? colorName(chosen.color).toLowerCase() : "?"}{copies > 1 ? `, ${copies} copies` : ""}.
+              {title(model.id)} in {colorsText}{copies > 1 ? `, ${copies} copies` : ""}.
               The first copy starts as soon as it's sent{job?.stale ? " (it slices first)" : ""}.
               {copies > 1 ? " You'll confirm a clear bed before each later copy." : ""}
             </div>

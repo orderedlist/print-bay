@@ -86,7 +86,7 @@ export async function start(opts: StartOptions = {}) {
   });
 
   // ---- printing ----
-  app.post<{ Body: { job: string; color: string; copies: number; startNow: boolean } }>("/api/print", async (req) =>
+  app.post<{ Body: { job: string; color?: string; colors?: Record<string, string>; copies: number; startNow: boolean } }>("/api/print", async (req) =>
     print(req.body));
   app.get("/api/queue", async () => getQueue());
   app.post("/api/queue/next", async () => startNext());

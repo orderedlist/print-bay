@@ -24,6 +24,7 @@ export interface ModelJob {
   file: string;
   color: string | null;
   hex: string | null;
+  parts: { name: string; color: string; hex: string }[]; // more than one: a multi-colour print
   copies: number;
   stats: Stats | null;
   stale: boolean;
@@ -35,7 +36,7 @@ export interface Model { id: string; file: string | null; kind: string | null; m
 export interface ScadParam { name: string; default: string; value: string; comment: string }
 
 export interface QueueEntry {
-  id: string; job: string; color: string; hex: string; slot: string; filename: string; copy: number; of: number;
+  id: string; job: string; color: string; hex: string; hexes?: string[]; slot: string; filename: string; copy: number; of: number;
 }
 export interface QueueState { active: QueueEntry | null; entries: QueueEntry[] }
 

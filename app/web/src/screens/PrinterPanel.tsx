@@ -12,6 +12,8 @@ const LABELS: Record<string, [string, string]> = {
   error: ["Error", "var(--bad)"],
   offline: ["Offline", "var(--bad)"],
 };
+const colorsOf = (e: { hex: string; hexes?: string[] }) => (e.hexes ?? [e.hex]).map(colorName).join(" + ");
+
 export const stateLabel = (state: string) => LABELS[state] ?? [state, "var(--muted)"];
 
 /** The camera's caption: what's printing and how far along. */
@@ -74,7 +76,7 @@ export function PrinterPanel({ live, models, toast, openModel }: Props) {
               <span className="mono" style={{ fontSize: 20 }}>{pct}%</span>
             </button>
             <div className="progress" style={{ marginTop: 10 }} aria-label="Progress"><div style={{ width: `${pct}%` }} /></div>
-            {active && <div className="faint" style={{ fontSize: 12, marginTop: 8 }}>{colorName(active.hex)} from {active.slot}</div>}
+            {active && <div className="faint" style={{ fontSize: 12, marginTop: 8 }}>{colorsOf(active)} from {active.slot}</div>}
           </>
         ) : (
           <div className="muted" style={{ marginTop: 10 }}>{status?.online === false ? `Can't reach the printer. ${status.message}` : "Nothing printing."}</div>
@@ -130,7 +132,7 @@ export function PrinterPanel({ live, models, toast, openModel }: Props) {
                   <span className="thumb thumb-sm">{m ? <Thumb model={m} /> : null}</span>
                   <span className="row-text">
                     <span>{title(e.job)} <span className="faint">· {e.copy} of {e.of}</span></span>
-                    <span className="row-sub"><span className="dot" style={{ width: 7, height: 7, background: e.hex, marginRight: 5 }} />{colorName(e.hex)} · {e.slot}{i === 0 && !idle ? " · after this print" : ""}</span>
+                    <span className="row-sub">{(e.hexes ?? [e.hex]).map((h, k) => <span key={k} className="dot" style={{ width: 7, height: 7, background: h, marginRight: 5 }} />)}{colorsOf(e)} · {e.slot}{i === 0 && !idle ? " · after this print" : ""}</span>
                   </span>
                   <button className="ibtn" aria-label={`Remove ${title(e.job)} copy ${e.copy}`} title="Remove"
                     onClick={() => act(() => api(`/api/queue/${e.id}`, { method: "DELETE" }))}>

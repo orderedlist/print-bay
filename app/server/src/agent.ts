@@ -232,6 +232,12 @@ OpenSCAD conventions (the app depends on these):
   an \`upright = false;\` flag and \`if (upright) part(); else <transform to print orientation> part();\`. The app renders with -D upright=true to show it.
 - Design to print without supports where possible (45 degree rule, short bridges), within the 260 x 260 mm bed.
   Thin plate-like walls in 1.8 mm (two perimeters a side); keep solid members compact (the slicer prints them as shells).
+- Multi-colour (the K2's CFS swaps filament within a layer, so colours print fused as ONE piece; never split a part
+  for colour): add \`part = "all";\` and wrap each colour's geometry in \`if (part == "all" || part == "<name>")\`, laid out exactly
+  where it sits in the finished part (an inlay fills its recess with no gap). List the parts in the job file, body first:
+  [parts] then \`<name> = "<colour>"\` lines (filament 1, 2, ... in that order). The app renders each part with -D part="<name>"
+  and slices them as one object. Keep colour where it's seen: for a face inlay printed face down, one or two layers
+  (0.2-0.4 mm) is enough and saves filament swaps.
 - End with an echo of the overall size, e.g. echo(str("Size ", W, " x ", D, " x ", H, " mm")).
 - Throwaway files (test renders, PNG previews, experiments) go in ${scratchDir(s.id)}/, never /tmp or anywhere else:
   only that folder and the model's own files are writable. Write files with the Write tool, not shell redirects.

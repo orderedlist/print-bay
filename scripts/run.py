@@ -8,8 +8,15 @@ run.py - slice a job with OrcaSlicer's CLI, then print it on the K2.
   python scripts/run.py jobs/stacking-box.toml --copies 1   # override copy count
   python scripts/run.py jobs/stacking-box.toml --color red  # override the job's color
 
-Jobs are single-color: the model is sliced as filament 1 and printed from
-whichever CFS slot holds the job's `color` (a name like "black" or a hex code).
+A job prints in its `color` (a name like "black" or a hex code) from whichever
+CFS slot holds it. A multi-colour OpenSCAD job lists its parts instead:
+
+  [parts]          # each renders with -D part="<name>"; filament 1, 2, ... in this order
+  disc = "white"
+  x    = "blue"
+
+The parts are sliced as one object with a filament each, so the colours print
+together layer by layer and come off the bed as one piece.
 
 Set ORCA to your OrcaSlicer binary if it isn't at the macOS default.
 """
@@ -20,12 +27,14 @@ import time
 import shutil
 import argparse
 import subprocess
+import json
 import tomllib
 import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import k2  # noqa: E402
+import parts3mf  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 ORCA = os.environ.get("ORCA", "/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer")
@@ -58,15 +67,24 @@ def slice_job(job):
     out = ROOT / "gcode" / job["name"]
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
-    if model.suffix == ".scad":
+    process, filaments = p["process"], [p["filament"]]
+    parts = job.get("parts")
+    if parts:
+        if model.suffix != ".scad":
+            sys.exit("[parts] needs an OpenSCAD model (each part renders with -D part=...)")
+        rendered = [(name, render_scad(model, out / f"part-{name}.stl", {**job.get("scad", {}), "part": f'"{name}"'}), i)
+                    for i, name in enumerate(parts, 1)]
+        model = parts3mf.write(rendered, out / "model.3mf", job["name"])
+        process, filaments = multi_filament(p["process"], p["filament"], list(parts.values()), out)
+    elif model.suffix == ".scad":
         model = render_scad(model, out / "model.stl", job.get("scad", {}))
     elif model.suffix == ".3mf":
         model = single_filament(model, out / "model.3mf")
 
     cmd = [
         ORCA,
-        "--load-settings", f"{p['machine']};{p['process']}",
-        "--load-filaments", str(p["filament"]),
+        "--load-settings", f"{p['machine']};{process}",
+        "--load-filaments", ";".join(str(f) for f in filaments),
         "--slice", "0",
         "--outputdir", str(out),
         str(model),
@@ -96,6 +114,31 @@ def render_scad(src, dest, params=None):
     return dest
 
 
+def hex_for(color):
+    return COLORS.get(color.lower(), color if color.startswith("#") else f"#{color}")
+
+
+def multi_filament(process, filament, colors, out):
+    """A filament profile per part, coloured like it, and the purge table to go with them.
+
+    The CLI crashes on a multi-filament object without filament colours and a
+    flush table; the colours also only matter for purging, not for which slot prints.
+    """
+    files = []
+    base = json.loads(Path(filament).read_text())
+    for i, color in enumerate(colors, 1):
+        f = out / f"filament-{i}.json"
+        f.write_text(json.dumps({**base, "filament_colour": [hex_for(color)]}))
+        files.append(f)
+    n = len(colors)
+    proc = json.loads(Path(process).read_text())
+    proc["flush_volumes_matrix"] = ["0" if i == j else "280" for i in range(n) for j in range(n)]
+    proc["flush_volumes_vector"] = ["140"] * (2 * n)
+    f = out / "process.json"
+    f.write_text(json.dumps(proc))
+    return f, files
+
+
 def single_filament(src, dest):
     """Copy a 3MF with every object on filament 1, so our filament profile applies."""
     with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zout:
@@ -113,7 +156,7 @@ def rgb(hex_color):
 
 
 def find_slot(color):
-    target = COLORS.get(color.lower(), color)
+    target = hex_for(color)
     if not re.fullmatch(r"#?[0-9A-Fa-f]{6}", target):
         sys.exit(f"Unknown color '{color}'. Use one of {', '.join(COLORS)} or a hex code.")
     loaded = k2.slots()
@@ -130,14 +173,14 @@ def find_slot(color):
     return best
 
 
-def for_slot(gcode, slot):
-    """Write a copy of single-tool G-code that pulls from the given CFS slot."""
+def for_slots(gcode, slots):
+    """Write a copy of the G-code whose filament i (T<i>) pulls from slots[i] in the CFS."""
     text = gcode.read_text()
-    tools = set(re.findall(r"^T(\d+)\s*$", text, re.M))
-    if len(tools) > 1:
-        sys.exit(f"{gcode.name} uses tools {sorted(tools)}; only single-color jobs are supported.")
-    out = gcode.with_name(f"{gcode.stem}-{slot['slot']}.gcode")
-    out.write_text(re.sub(r"^T\d+\s*$", f"T{slot['tool']}", text, flags=re.M))
+    tools = {int(t) for t in re.findall(r"^T(\d+)\s*$", text, re.M)}
+    if max(tools, default=0) >= len(slots):
+        sys.exit(f"{gcode.name} uses filaments {sorted(tools)} but only {len(slots)} colour(s) were given.")
+    out = gcode.with_name(f"{gcode.stem}-{'-'.join(s['slot'] for s in slots)}.gcode")
+    out.write_text(re.sub(r"^T(\d+)\s*$", lambda m: f"T{slots[int(m[1])]['tool']}", text, flags=re.M))
     return out
 
 
@@ -172,12 +215,13 @@ def main():
     if a.slice_only:
         return
 
-    color = a.color or job.get("color")
-    if not color:
+    colors = list(job["parts"].values()) if job.get("parts") else [a.color or job.get("color")]
+    if not all(colors):
         sys.exit("No color: set `color` in the job or pass --color.")
-    slot = find_slot(color)
-    print(f"Printing in {color} from {slot['slot']} ({slot['color']}, {slot['remain']}% left)")
-    gcode = for_slot(gcode, slot)
+    slots = [find_slot(c) for c in colors]
+    for c, slot in zip(colors, slots):
+        print(f"{c} from {slot['slot']} ({slot['color']}, {slot['remain']}% left)")
+    gcode = for_slots(gcode, slots)
 
     copies = a.copies or job.get("copies", 1)
     k2.upload(gcode)

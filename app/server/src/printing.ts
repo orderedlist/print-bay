@@ -7,7 +7,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { CACHE } from "./config.js";
 import { publish } from "./events.js";
-import { COLORS, gcodePath, getJob, isStale } from "./jobs.js";
+import { gcodePath, getJob, hexFor, isStale } from "./jobs.js";
 import * as moonraker from "./moonraker.js";
 import { slice } from "./slice.js";
 
@@ -18,6 +18,7 @@ export interface QueueEntry {
   job: string;
   color: string;
   hex: string;
+  hexes?: string[]; // every colour, for multi-colour prints
   slot: string;
   filename: string; // already uploaded to the printer
   copy: number;
@@ -46,7 +47,7 @@ function rgb(hex: string) {
 }
 
 export function findSlot(color: string, slots: moonraker.Slot[]): moonraker.Slot {
-  const target = COLORS[color.toLowerCase()] ?? color;
+  const target = hexFor(color);
   if (!/^#?[0-9a-f]{6}$/i.test(target)) throw fail(`Unknown color "${color}"`);
   if (!slots.length) throw fail("The CFS reports no filament loaded", 409);
   const distance = (s: moonraker.Slot) =>
@@ -57,13 +58,14 @@ export function findSlot(color: string, slots: moonraker.Slot[]): moonraker.Slot
   return best;
 }
 
-/** Copy of single-tool G-code that pulls from the given CFS slot. */
-function forSlot(gcode: string, slot: moonraker.Slot): string {
+/** Copy of the G-code whose filament i (T<i>) pulls from slots[i] in the CFS. */
+function forSlots(gcode: string, slots: moonraker.Slot[]): string {
   const text = fs.readFileSync(gcode, "utf8");
-  const tools = new Set([...text.matchAll(/^T(\d+)\s*$/gm)].map((m) => m[1]));
-  if (tools.size > 1) throw fail(`${path.basename(gcode)} uses tools ${[...tools].join(", ")}; only single-color jobs are supported`);
-  const out = gcode.replace(/\.gcode$/, `-${slot.slot}.gcode`);
-  fs.writeFileSync(out, text.replace(/^T\d+\s*$/gm, `T${slot.tool}`));
+  const tools = [...text.matchAll(/^T(\d+)\s*$/gm)].map((m) => Number(m[1]));
+  if (Math.max(0, ...tools) >= slots.length)
+    throw fail(`${path.basename(gcode)} uses ${Math.max(...tools) + 1} filaments but ${slots.length} colour(s) were picked; re-slice it`);
+  const out = gcode.replace(/\.gcode$/, `-${slots.map((s) => s.slot).join("-")}.gcode`);
+  fs.writeFileSync(out, text.replace(/^T(\d+)\s*$/gm, (_, i) => `T${slots[Number(i)].tool}`));
   return out;
 }
 
@@ -72,21 +74,29 @@ async function startEntry(entry: QueueEntry) {
   state.active = entry;
 }
 
-export async function print(opts: { job: string; color: string; copies: number; startNow: boolean }) {
+/**
+ * `color` is the spool for a one-colour job; `colors` gives each part of a
+ * multi-colour job its spool (by part name), defaulting to the job's own colours.
+ */
+export async function print(opts: { job: string; color?: string; colors?: Record<string, string>; copies: number; startNow: boolean }) {
   const job = getJob(opts.job);
   const copies = Math.max(1, Math.min(20, Math.floor(opts.copies)));
   const status = await moonraker.getStatus();
   if (!status.online) throw fail("Can't reach the printer", 503);
-  const slot = findSlot(opts.color, status.slots);
+  const colors = job.parts.length ? job.parts.map((p) => opts.colors?.[p.name] ?? p.color) : [opts.color ?? job.color ?? ""];
+  if (!colors.every(Boolean)) throw fail("Pick a colour");
+  const slots = colors.map((c) => findSlot(c, status.slots));
+  const slot = slots[0];
   if (opts.startNow && !moonraker.IDLE_STATES.has(status.state))
     throw fail(`The printer is ${status.state}; add it to the queue instead`, 409);
 
   if (isStale(job)) await slice(job.name);
-  const file = forSlot(gcodePath(job.name), slot);
+  const file = forSlots(gcodePath(job.name), slots);
   await moonraker.upload(file);
 
   const entries = Array.from({ length: copies }, (_, i): QueueEntry => ({
-    id: randomUUID(), job: job.name, color: opts.color, hex: slot.color, slot: slot.slot,
+    id: randomUUID(), job: job.name, color: colors.join(" + "), hex: slot.color,
+    ...(slots.length > 1 ? { hexes: slots.map((s) => s.color) } : {}), slot: slots.map((s) => s.slot).join(" + "),
     filename: path.basename(file), copy: i + 1, of: copies,
   }));
   let started = false;
@@ -96,7 +106,7 @@ export async function print(opts: { job: string; color: string; copies: number; 
   }
   state.entries.push(...entries);
   save();
-  return { started, queued: entries.length, slot: slot.slot };
+  return { started, queued: entries.length, slot: slots.map((s) => s.slot).join(" + ") };
 }
 
 /** Start the next queued copy once someone confirms the bed is clear. */

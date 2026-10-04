@@ -38,6 +38,26 @@ function threemfToStl(src: string, dest: string) {
   writeStl(triangles, dest);
 }
 
+/** Triangles of a binary STL. */
+function readBinaryStl(file: string): Buffer[] {
+  const buf = fs.readFileSync(file);
+  const n = buf.readUInt32LE(80);
+  return Array.from({ length: n }, (_, t) => buf.subarray(84 + t * 50, 84 + t * 50 + 50));
+}
+
+/** One STL of all the parts, each triangle's attribute bytes holding its part number (1, 2, ...). */
+function joinParts(files: string[], dest: string) {
+  const tris = files.flatMap((f, i) => readBinaryStl(f).map((t) => {
+    const copy = Buffer.from(t);
+    copy.writeUInt16LE(i + 1, 48);
+    return copy;
+  }));
+  const head = Buffer.alloc(84);
+  head.write("Print Bay multi-colour: part number in the attribute bytes");
+  head.writeUInt32LE(tris.length, 80);
+  fs.writeFileSync(dest, Buffer.concat([head, ...tris]));
+}
+
 const inflight = new Map<string, Promise<string>>();
 
 /**
@@ -56,7 +76,8 @@ export function meshFor(modelId: string, opts: { print?: boolean } = {}): Promis
   const name = print ? `${modelId}.print` : modelId;
   const dest = path.join(CACHE, `${name}.stl`);
   const stamp = path.join(CACHE, `${name}.stl.key`);
-  const key = JSON.stringify({ mtime: fs.statSync(src).mtimeMs, params });
+  const parts = src.endsWith(".scad") ? job?.parts ?? [] : [];
+  const key = JSON.stringify({ mtime: fs.statSync(src).mtimeMs, params, parts });
   if (fs.existsSync(dest) && fs.existsSync(stamp) && fs.readFileSync(stamp, "utf8") === key)
     return Promise.resolve(dest);
 
@@ -64,8 +85,18 @@ export function meshFor(modelId: string, opts: { print?: boolean } = {}): Promis
     const work = (async () => {
       const tmp = dest + ".tmp.stl";
       if (src.endsWith(".scad")) {
-        const defs = Object.entries(params).flatMap(([k, v]) => ["-D", `${k}=${v}`]);
-        await run(OPENSCAD, [...(print ? [] : ["-D", "upright=true"]), ...defs, "-o", tmp, src], { maxBuffer: 1 << 24 });
+        const defs = [...(print ? [] : ["-D", "upright=true"]), ...Object.entries(params).flatMap(([k, v]) => ["-D", `${k}=${v}`])];
+        if (parts.length) { // each colour on its own, then joined with part numbers
+          const files = await Promise.all(parts.map(async (p) => {
+            const f = `${dest}.${p.name}.tmp.stl`;
+            await run(OPENSCAD, [...defs, "-D", `part="${p.name}"`, "--export-format", "binstl", "-o", f, src], { maxBuffer: 1 << 24 });
+            return f;
+          }));
+          joinParts(files, tmp);
+          for (const f of files) fs.rmSync(f, { force: true });
+        } else {
+          await run(OPENSCAD, [...defs, "-o", tmp, src], { maxBuffer: 1 << 24 });
+        }
       } else {
         threemfToStl(src, tmp);
       }

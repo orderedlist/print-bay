@@ -21,15 +21,27 @@ const WARP_AREA = 20000;  // mm^2 x shrink ratio
 const PLA_SHRINK = 0.3;
 
 export function readStl(file: string): Float32Array {
+  return readStlParts(file).pos;
+}
+
+/**
+ * Triangles of an STL, plus which part each belongs to: multi-colour meshes from
+ * mesh.ts carry the part number (1, 2, ...) in each triangle's attribute bytes.
+ */
+export function readStlParts(file: string): { pos: Float32Array; part: Uint16Array | null } {
   const buf = fs.readFileSync(file);
-  const n = buf.readUInt32LE(80);
+  const n = buf.length >= 84 ? buf.readUInt32LE(80) : 0;
   if (84 + n * 50 === buf.length) {
     const pos = new Float32Array(n * 9);
-    for (let t = 0; t < n; t++) for (let k = 0; k < 9; k++) pos[t * 9 + k] = buf.readFloatLE(84 + t * 50 + 12 + k * 4);
-    return pos;
+    const part = new Uint16Array(n);
+    for (let t = 0; t < n; t++) {
+      for (let k = 0; k < 9; k++) pos[t * 9 + k] = buf.readFloatLE(84 + t * 50 + 12 + k * 4);
+      part[t] = buf.readUInt16LE(84 + t * 50 + 48);
+    }
+    return { pos, part: part.some((p) => p > 1) ? part : null };
   }
   const nums = [...buf.toString("utf8").matchAll(/vertex\s+(\S+)\s+(\S+)\s+(\S+)/g)].flatMap((m) => [+m[1], +m[2], +m[3]]);
-  return Float32Array.from(nums);
+  return { pos: Float32Array.from(nums), part: null };
 }
 
 function center(pos: Float32Array): [number, number, number] {
@@ -42,7 +54,7 @@ function center(pos: Float32Array): [number, number, number] {
   return [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
 }
 
-interface Tri { n: [number, number, number]; area: number; c: [number, number, number]; zmin: number }
+interface Tri { n: [number, number, number]; area: number; c: [number, number, number]; zmin: number; lo: number[]; hi: number[] }
 
 function triangles(pos: Float32Array): Tri[] {
   const out: Tri[] = [];
@@ -55,6 +67,8 @@ function triangles(pos: Float32Array): Tri[] {
       n: [nx / len, ny / len, nz / len], area: len / 2,
       c: [(pos[o] + pos[o + 3] + pos[o + 6]) / 3, (pos[o + 1] + pos[o + 4] + pos[o + 7]) / 3, (pos[o + 2] + pos[o + 5] + pos[o + 8]) / 3],
       zmin: Math.min(pos[o + 2], pos[o + 5], pos[o + 8]),
+      lo: [0, 1, 2].map((a) => Math.min(pos[o + a], pos[o + 3 + a], pos[o + 6 + a])),
+      hi: [0, 1, 2].map((a) => Math.max(pos[o + a], pos[o + 3 + a], pos[o + 6 + a])),
     });
   }
   return out;
@@ -160,16 +174,51 @@ function intersect(pos: Float32Array, t: number, o: number[], d: number[]): numb
   return (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]) * inv;
 }
 
+// ---- multi-colour parts ----
+
+function boxOf(tris: Tri[], list: number[]) {
+  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  for (const t of list) for (let a = 0; a < 3; a++) {
+    min[a] = Math.min(min[a], tris[t].lo[a]); max[a] = Math.max(max[a], tris[t].hi[a]);
+  }
+  return { min, max };
+}
+
+/** Bounding box of each colour part. */
+function partBoxes(tris: Tri[], part: Uint16Array) {
+  const by = new Map<number, number[]>();
+  part.forEach((p, t) => { if (!by.has(p)) by.set(p, []); by.get(p)!.push(t); });
+  return [...by].map(([p, list]) => ({ part: p, ...boxOf(tris, list) }));
+}
+
+/** Merge bodies whose bounds touch: separate colour shells that print fused. */
+function touching(bodies: number[][], tris: Tri[]): number[][] {
+  const boxes = bodies.map((b) => boxOf(tris, b));
+  const root = bodies.map((_, i) => i);
+  const find = (i: number): number => (root[i] === i ? i : (root[i] = find(root[i])));
+  const near = (a: typeof boxes[0], b: typeof boxes[0]) => [0, 1, 2].every((k) => a.min[k] <= b.max[k] + 0.3 && b.min[k] <= a.max[k] + 0.3);
+  for (let i = 0; i < bodies.length; i++) for (let j = i + 1; j < bodies.length; j++) if (near(boxes[i], boxes[j])) root[find(i)] = find(j);
+  const groups = new Map<number, number[]>();
+  bodies.forEach((b, i) => { const r = find(i); groups.set(r, [...(groups.get(r) ?? []), ...b]); });
+  return [...groups.values()];
+}
+
 // ---- the checks ----
 
-export function check(pos: Float32Array, opts: { supports?: boolean } = {}): CheckReport {
+/**
+ * `part` (per triangle, from 1) marks a multi-colour model: the first part is the
+ * body, later ones are colour set into it. They print fused, so parts that touch
+ * count as one piece, and a colour inlay is skin-deep, not a wall.
+ */
+export function check(pos: Float32Array, opts: { supports?: boolean; part?: Uint16Array | null } = {}): CheckReport {
   const size = center(pos);
   const tris = triangles(pos);
   const adj = adjacency(pos);
   const findings: Finding[] = [];
+  const part = opts.part ?? null;
 
   // solids: more than one body means something came apart
-  const bodies = components(adj).sort((a, b) => b.length - a.length);
+  const bodies = (part ? touching(components(adj), tris) : components(adj)).sort((a, b) => b.length - a.length);
   if (bodies.length > 1) {
     const stray = bodies[bodies.length - 1];
     findings.push({ rule: "solids", severity: "fail", at: weighted(tris, stray),
@@ -185,7 +234,11 @@ export function check(pos: Float32Array, opts: { supports?: boolean } = {}): Che
   }
 
   // overhangs: downward faces steeper than 45 degrees that aren't on the bed
-  const down = (t: number) => tris[t].n[2] < -OVERHANG_COS && tris[t].zmin > 0.3;
+  // (in a multi-colour model, a face resting on another colour's part is held up by it)
+  const others = part ? partBoxes(tris, part) : [];
+  const restsOnPart = (t: number) => others.some((b) => b.part !== part![t] && tris[t].zmin <= b.max[2] + 0.3 &&
+    tris[t].c[0] >= b.min[0] - 0.3 && tris[t].c[0] <= b.max[0] + 0.3 && tris[t].c[1] >= b.min[1] - 0.3 && tris[t].c[1] <= b.max[1] + 0.3);
+  const down = (t: number) => tris[t].n[2] < -OVERHANG_COS && tris[t].zmin > 0.3 && !(part && restsOnPart(t));
   let supported = 0, supportedArea = 0, supportedAt: [number, number, number] = [0, 0, 0], biggest = 0;
   for (const region of components(adj, down)) {
     const area = region.reduce((s, t) => s + tris[t].area, 0);
@@ -216,7 +269,8 @@ export function check(pos: Float32Array, opts: { supports?: boolean } = {}): Che
 
   // thin walls: cast inward from face samples, look for the far side
   const grid = new RayGrid(pos, Math.max(2, Math.cbrt((size[0] * size[1] * size[2]) / 20000)));
-  const order = tris.map((_, i) => i).sort((a, b) => tris[b].area - tris[a].area).slice(0, 4000);
+  const order = tris.map((_, i) => i).filter((t) => !part || part[t] <= 1) // colour inlays are skin-deep
+    .sort((a, b) => tris[b].area - tris[a].area).slice(0, 4000);
   let thinnest = Infinity, thinAt: [number, number, number] = [0, 0, 0], thinCount = 0, thinArea = 0;
   for (const t of order) {
     const { n, c } = tris[t];
