@@ -10,10 +10,10 @@ async function createWindow() {
     width: 1440,
     height: 900,
     minWidth: 380,
-    backgroundColor: "#111214",
+    backgroundColor: "#0a0a0b",
     title: "Print Bay",
     titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 18, y: 26 }, // centered on the 64px top bar
+    trafficLightPosition: { x: 46, y: 52 }, // inside the floating left panel, beside the brand
     webPreferences: { contextIsolation: true, sandbox: true },
   });
   // Links out (model sources) open in the default browser, not the app window.

@@ -180,6 +180,11 @@ The repo is ${ROOT}. Models live in models/<slug>/, jobs (how to slice/print a m
 OpenSCAD conventions (the app depends on these):
 - Parameters first: top-level assignments whose value is only a number or "n * in" (with \`in = 25.4;\`), each with a // comment.
   The app shows exactly these as an editable form. Derived values come after and must reference parameters.
+- Start each parameter's comment with an OpenSCAD customizer range so the app shows the right control:
+  \`reach = 50; // [30:80] dowel centre out from the wall\` (a slider; [min:step:max] to set the step),
+  \`rows = 3; // [1:6] bays up\` (whole numbers over a short range get a stepper),
+  \`screw_dia = 4.5; // [3.4:M3, 4.5:M4 / #8, 5.5:M5] screw clearance\` (one button per choice).
+  Pick ranges the part still works and prints across. Values in inches stay plain ("3.25 * in") with no range.
 - Model the part upright (as used), then lay it out for printing at the end, like models/tote-rack/tote-rack.scad:
   an \`upright = false;\` flag and \`if (upright) part(); else <transform to print orientation> part();\`. The app renders with -D upright=true to show it.
 - Design to print without supports where possible (45 degree rule, short bridges), within the 260 x 260 mm bed.

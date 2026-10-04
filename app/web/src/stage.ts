@@ -3,6 +3,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
+import { STAGE_COLORS, type Theme } from "./theme";
 
 export const BED = 260;
 
@@ -58,6 +59,9 @@ export class Stage {
   private paths = new THREE.Group();
   private data: Toolpaths | null = null;
   private resizer: ResizeObserver;
+  private shift = 0; // px the view's center moves right, to sit between floating panels
+  private grid: THREE.GridHelper;
+  private edge: THREE.LineSegments;
   private markers = new THREE.Group();
   private plainMaterial: THREE.Material | null = null;
   private colorMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0 });
@@ -76,15 +80,15 @@ export class Stage {
     this.camera.up.set(0, 0, 1); // models are Z-up
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
-    this.scene.background = new THREE.Color("#0d0e10");
+    this.scene.background = new THREE.Color(STAGE_COLORS.dark.background);
     addLights(this.scene);
 
-    const grid = new THREE.GridHelper(BED, 13, "#2c2f33", "#2c2f33");
-    grid.rotation.x = Math.PI / 2;
-    const edge = new THREE.LineSegments(
+    this.grid = new THREE.GridHelper(BED, 13, STAGE_COLORS.dark.grid, STAGE_COLORS.dark.grid);
+    this.grid.rotation.x = Math.PI / 2;
+    this.edge = new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.PlaneGeometry(BED, BED)),
-      new THREE.LineBasicMaterial({ color: "#4a4f55" }));
-    this.scene.add(grid, edge, this.paths, this.markers);
+      new THREE.LineBasicMaterial({ color: STAGE_COLORS.dark.edge }));
+    this.scene.add(this.grid, this.edge, this.paths, this.markers);
     this.paths.position.set(-BED / 2, -BED / 2, 0); // G-code is in bed coordinates
 
     // a click (not an orbit drag) on the mesh picks a triangle
@@ -115,7 +119,25 @@ export class Stage {
     if (!w || !h) return;
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
+    if (this.shift) this.camera.setViewOffset(w, h, -this.shift, 0, w, h);
+    else this.camera.clearViewOffset();
     this.camera.updateProjectionMatrix();
+  }
+
+  /** Center the view this many px right of the canvas middle (negative: left). */
+  setShift(px: number) {
+    this.shift = px;
+    this.resize();
+  }
+
+  setTheme(theme: Theme) {
+    const c = STAGE_COLORS[theme];
+    (this.scene.background as THREE.Color).set(c.background);
+    const grid = this.grid.material as THREE.LineBasicMaterial;
+    grid.color.set(c.grid);
+    grid.vertexColors = false;
+    grid.needsUpdate = true;
+    (this.edge.material as THREE.LineBasicMaterial).color.set(c.edge);
   }
 
   dispose() {

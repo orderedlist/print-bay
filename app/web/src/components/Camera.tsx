@@ -64,7 +64,7 @@ export function Camera({ children }: { children?: React.ReactNode }) {
           ) : (
             <>
               <div>No video. The camera allows one viewer; close the Creality app if it's watching.</div>
-              <button className="btn btn-sm" onClick={() => setAttempt((a) => a + 1)}>Try again</button>
+              <button className="cta cta-sm" onClick={() => setAttempt((a) => a + 1)}>Try again</button>
             </>
           )}
         </div>

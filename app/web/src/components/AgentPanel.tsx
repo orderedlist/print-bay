@@ -44,9 +44,11 @@ interface Props {
   /** Prompt starting points: clicking one fills the composer (it isn't sent). */
   starters?: string[];
   toast: (msg: string, error?: boolean) => void;
+  /** Offered once the chat has history: start a fresh one. */
+  onNewChat?: () => void;
 }
 
-export function AgentPanel({ session, placeholder, allowUploads, empty, starters, toast }: Props) {
+export function AgentPanel({ session, placeholder, allowUploads, empty, starters, toast, onNewChat }: Props) {
   const [text, setText] = useState("");
   const [uploads, setUploads] = useState<string[]>([]);
   const [uploading, setUploading] = useState(0);
@@ -105,7 +107,7 @@ export function AgentPanel({ session, placeholder, allowUploads, empty, starters
           if (entry.role === "tool") return <ToolLine key={i} entry={entry} />;
           return <div key={i} className={entry.error ? "agent-note agent-error" : "agent-note"} style={{ whiteSpace: "pre-wrap" }}>{entry.text}</div>;
         })}
-        {session.running && <div className="agent-note"><span className="agent-spinner" aria-hidden="true" /> Claude is working…</div>}
+        {session.running && <div className="agent-note"><span className="spinner" aria-hidden="true" /> Claude is working…</div>}
       </div>
 
       <div className="agent-compose">
@@ -126,23 +128,35 @@ export function AgentPanel({ session, placeholder, allowUploads, empty, starters
             {uploading > 0 && <span className="muted" style={{ fontSize: 12 }}>Uploading…</span>}
           </div>
         )}
-        <textarea ref={input} className="field agent-input" rows={3} value={text} placeholder={placeholder}
-          onChange={(e) => setText(e.target.value)}
-          onPaste={allowUploads ? (e) => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); upload(files); } } : undefined}
-          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } }} />
-        <div className="agent-actions">
+        <div className="composer">
+          <label className="sr-only" htmlFor={`compose-${session.id}`}>Message Claude</label>
+          <textarea id={`compose-${session.id}`} ref={input} rows={2} value={text} placeholder={placeholder}
+            onChange={(e) => setText(e.target.value)}
+            onPaste={allowUploads ? (e) => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); upload(files); } } : undefined}
+            onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } }} />
           {allowUploads && <>
             <input ref={fileInput} type="file" accept="image/*" multiple hidden onChange={(e) => { if (e.target.files) upload(e.target.files); e.target.value = ""; }} />
-            <button className="btn btn-sm" onClick={() => fileInput.current?.click()}>Add photos</button>
+            <button className="ibtn" onClick={() => fileInput.current?.click()} aria-label="Add photos" title="Add photos">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 16-5-5-8 8" /></svg>
+            </button>
           </>}
-          <button className="btn btn-sm" disabled={session.running || session.turns === 0} onClick={() => call("undo")}
-            title="Restore the files from before Claude's last change">Undo last change</button>
-          <span className="spacer" />
-          {session.cost >= 0.01 && <span className="faint mono" style={{ fontSize: 11 }} title="Claude usage for this chat">{money(session.cost)}</span>}
           {session.running
-            ? <button className="btn btn-sm btn-danger" onClick={() => call("stop")}>Stop</button>
-            : <button className="btn btn-sm btn-primary" disabled={!text.trim() && !uploads.length} onClick={send}>Send</button>}
+            ? <button className="ibtn filled" onClick={() => call("stop")} aria-label="Stop Claude" title="Stop">
+                <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" /></svg>
+              </button>
+            : <button className="ibtn go" disabled={!text.trim() && !uploads.length} onClick={send} aria-label="Send (⌘↩)" title="Send (⌘↩)">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" /></svg>
+              </button>}
         </div>
+        {(session.turns > 0 || (onNewChat && session.transcript.length > 0) || session.cost >= 0.01) && (
+          <div className="agent-meta">
+            <button className="link-btn" disabled={session.running || session.turns === 0} onClick={() => call("undo")}
+              title="Restore the files from before Claude's last change">Undo last change</button>
+            {onNewChat && session.transcript.length > 0 && <button className="link-btn" disabled={session.running} onClick={onNewChat}>New chat</button>}
+            <span className="spacer" />
+            {session.cost >= 0.01 && <span className="faint mono" style={{ fontSize: 11 }} title="Claude usage for this chat">{money(session.cost)}</span>}
+          </div>
+        )}
       </div>
     </div>
   );

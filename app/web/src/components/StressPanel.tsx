@@ -15,7 +15,7 @@ function headline(r: StressResult, kg: number): { text: string; tone: string } {
   const k = (n: number) => (n >= 10 ? Math.round(n) : Math.round(n * 10) / 10);
   const lb = (n: number) => Math.round(n * 2.205);
   if (r.safety >= 100) return { text: "Barely feels this", tone: "var(--ok)" };
-  if (r.safety < 1) return { text: `Would break: holds about ${k(r.breakKg)} kg, not ${k(kg)}`, tone: "var(--danger)" };
+  if (r.safety < 1) return { text: `Would break: holds about ${k(r.breakKg)} kg, not ${k(kg)}`, tone: "var(--bad)" };
   if (r.safety < 2) return { text: `Cutting it close: breaks around ${k(r.breakKg)} kg (${lb(r.breakKg)} lb)`, tone: "var(--warn)" };
   return { text: `Holds up to about ${k(r.breakKg)} kg (${lb(r.breakKg)} lb)`, tone: "var(--ok)" };
 }
@@ -107,34 +107,34 @@ export function StressPanel({ stage, meshVersion }: Props) {
   const head = result ? headline(result, kg) : null;
 
   return (
-    <div className="paths-ui stress-ui">
+    <div className="panel float centered">
       {!result && (
         <div className="stress-steps">
-          <button className="chip" aria-pressed={picking === "load"} onClick={() => setPicking("load")}>
-            <i className="swatch" style={{ background: "#ff8a3d" }} />{load ? "Load picked" : "1. Click where the weight presses"}
+          <button className="pick" aria-pressed={picking === "load"} onClick={() => setPicking("load")}>
+            <i style={{ background: "#ff8a3d" }} />{load ? "Load picked" : "1. Click where the weight presses"}
           </button>
-          <button className="chip" aria-pressed={picking === "hold"} onClick={() => setPicking("hold")}>
-            <i className="swatch" style={{ background: "#3d8bfd" }} />{holds.length ? `${holds.length} hold${holds.length > 1 ? "s" : ""}` : "2. Click what holds it up"}
+          <button className="pick" aria-pressed={picking === "hold"} onClick={() => setPicking("hold")}>
+            <i style={{ background: "#3d8bfd" }} />{holds.length ? `${holds.length} hold${holds.length > 1 ? "s" : ""}` : "2. Click what holds it up"}
           </button>
         </div>
       )}
-      {picking === "hold" && !result && <div className="faint">Click every face that holds it (each screw or hook). Click again to remove.</div>}
+      {picking === "hold" && !result && <div className="faint" style={{ fontSize: 12 }}>Click every face that holds it (each screw or hook). Click again to remove.</div>}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <label style={{ display: "flex", gap: 6, alignItems: "center" }}>Load
-          <input className="field mono" type="number" min={0.1} step={0.5} value={kg} style={{ width: 72, height: 36 }}
+          <input className="field mono" type="number" min={0.1} step={0.5} value={kg} style={{ width: 72 }}
             onChange={(e) => { setKg(Math.max(0.1, Number(e.target.value) || 0.1)); setResult(null); }} /> kg
         </label>
-        <select className="field" value={material} style={{ width: 90, height: 36 }} aria-label="Material"
+        <select className="field" value={material} style={{ width: 90 }} aria-label="Material"
           onChange={(e) => { setMaterial(e.target.value); setResult(null); }}>
           {MATERIALS.map((m) => <option key={m.name}>{m.name}</option>)}
         </select>
         <span className="spacer" />
-        {(load || holds.length > 0 || result) && <button className="btn btn-sm" onClick={reset} disabled={running}>Reset</button>}
-        <button className="btn btn-sm btn-primary" onClick={run} disabled={running}>
+        {(load || holds.length > 0 || result) && <button className="cta cta-sm" onClick={reset} disabled={running}>Reset</button>}
+        <button className="cta cta-sm go" onClick={run} disabled={running}>
           {running ? "Solving…" : load && holds.length ? "Run" : "Run (auto-aim)"}
         </button>
       </div>
-      {error && <div style={{ color: "#ffb3b3" }}>{error}</div>}
+      {error && <div style={{ color: "var(--bad)" }}>{error}</div>}
       {result && head && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ fontWeight: 600, color: head.tone, fontSize: 15 }}>{head.text}</div>
