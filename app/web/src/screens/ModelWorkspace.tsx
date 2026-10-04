@@ -213,7 +213,8 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
     <>
       {drawn ? (
         <ModelViewer model={model} mode={mode} setMode={setMode} theme={theme} shift={shift}
-          onSize={setSize} onAvailable={setAvailable} checks={checks} />
+          onSize={setSize} onAvailable={setAvailable} checks={checks}
+          colors={colorways.map((c, i) => chosenAll[i]?.color ?? c.hex ?? "").filter(Boolean)} />
       ) : (
         <div className="stage-hint">
           {session?.running ? <span className="spinner" style={{ width: 28, height: 28, borderWidth: 3 }} /> : ICONS.spark}

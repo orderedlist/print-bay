@@ -39,14 +39,10 @@ export function parseMesh(buffer: ArrayBuffer, partHexes: string[] = []): { geom
   const view = new DataView(buffer);
   const n = buffer.byteLength >= 84 ? view.getUint32(80, true) : 0;
   if (partHexes.length > 1 && 84 + n * 50 === buffer.byteLength && geometry.attributes.position.count === n * 3) {
-    const palette = partHexes.map((h) => displayColor(h));
-    const colors = new Float32Array(n * 9);
-    for (let t = 0; t < n; t++) {
-      const c = palette[(view.getUint16(84 + t * 50 + 48, true) || 1) - 1] ?? palette[0];
-      for (let v = 0; v < 3; v++) colors.set([c.r, c.g, c.b], (t * 3 + v) * 3);
-    }
-    geometry.userData.partColors = colors;
-    geometry.setAttribute("color", new THREE.BufferAttribute(colors.slice(), 3));
+    const parts = new Uint16Array(n);
+    for (let t = 0; t < n; t++) parts[t] = (view.getUint16(84 + t * 50 + 48, true) || 1) - 1;
+    geometry.userData.parts = parts;
+    paintParts(geometry, partHexes);
   }
   geometry.computeBoundingBox();
   const box = geometry.boundingBox!;
@@ -55,6 +51,19 @@ export function parseMesh(buffer: ArrayBuffer, partHexes: string[] = []): { geom
   geometry.computeVertexNormals();
   geometry.computeBoundingBox();
   return { geometry, size: box.getSize(new THREE.Vector3()) };
+}
+
+/** Per-vertex colours for a multi-colour mesh, one hex per part (kept in userData.partColors). */
+function paintParts(geometry: THREE.BufferGeometry, hexes: string[], show = true) {
+  const parts = geometry.userData.parts as Uint16Array;
+  const palette = hexes.map((h) => displayColor(h));
+  const colors = new Float32Array(parts.length * 9);
+  parts.forEach((p, t) => {
+    const c = palette[p] ?? palette[0];
+    for (let v = 0; v < 3; v++) colors.set([c.r, c.g, c.b], (t * 3 + v) * 3);
+  });
+  geometry.userData.partColors = colors;
+  if (show) geometry.setAttribute("color", new THREE.BufferAttribute(colors.slice(), 3));
 }
 
 export function addLights(scene: THREE.Scene) {
@@ -236,6 +245,17 @@ export class Stage {
         const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, -1), new THREE.Vector3(p.at[0], p.at[1], p.at[2] + size * 7), size * 6, p.color, size * 2.2, size * 1.6);
         this.markers.add(arrow);
       }
+    }
+  }
+
+  /** Show the part in these filament colours: one for a plain model, one per part for a multi-colour one. */
+  recolor(hexes: string[]) {
+    if (!hexes.length) return;
+    for (const mesh of [this.mesh, this.layout]) {
+      if (!mesh) continue;
+      // (while stress or picks are painted on, keep them: plainColors() brings these back)
+      if (mesh.geometry.userData.parts) paintParts(mesh.geometry, hexes, mesh !== this.mesh || mesh.material === this.plainMaterial);
+      else ((mesh === this.mesh ? this.plainMaterial : mesh.material) as THREE.MeshStandardMaterial | null)?.color?.set(displayColor(hexes[0]));
     }
   }
 

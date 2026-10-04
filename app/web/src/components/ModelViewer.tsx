@@ -23,16 +23,20 @@ interface Props {
   onAvailable?: (views: ViewAvailability) => void;
   onStatus?: (msg: string | null) => void;
   checks?: CheckReport | null;
+  /** The filament colours picked for printing (one per part), to show the part in. */
+  colors?: string[];
 }
 
 /** The model on the full-window stage, plus the floating controls for the current view. */
-export function ModelViewer({ model, mode, setMode, theme, shift, onSize, onAvailable, onStatus, checks }: Props) {
+export function ModelViewer({ model, mode, setMode, theme, shift, onSize, onAvailable, onStatus, checks, colors }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [stage, setStage] = useState<Stage | null>(null);
   const [layoutReady, setLayoutReady] = useState(false);
   const modeRef = useRef(mode); // current mode for async loads (state in their closures is stale)
   modeRef.current = mode;
   const [meshVersion, setMeshVersion] = useState(0);
+  const [layoutVersion, setLayoutVersion] = useState(0);
+  const colorKey = (colors ?? []).join(",");
   const [loading, setLoading] = useState<string | null>("Loading…");
   const [paths, setPaths] = useState<Toolpaths | null>(null);
   const [, redraw] = useState(0);
@@ -90,11 +94,15 @@ export function ModelViewer({ model, mode, setMode, theme, shift, onSize, onAvai
         if (!alive) return;
         stage.setLayoutMesh(parseMesh(buf, model.jobs[0]?.parts.map((p) => p.hex)).geometry, model.jobs[0]?.hex ?? null);
         setLayoutReady(true);
+        setLayoutVersion((v) => v + 1);
       })
       .catch(() => {});
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage, model.meshKey]);
+
+  // paint the picked filament colours, and again whenever a new mesh arrives
+  useEffect(() => { if (stage && colors?.length) stage.recolor(colors); }, [stage, colorKey, meshVersion, layoutVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const available: ViewAvailability = { model: true, paths: !!paths, stress: !loading, layout: layoutReady };
   useEffect(() => { onAvailable?.(available); }, [available.paths, available.stress, available.layout]); // eslint-disable-line react-hooks/exhaustive-deps
