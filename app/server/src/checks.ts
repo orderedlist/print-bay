@@ -184,6 +184,13 @@ function boxOf(tris: Tri[], list: number[]) {
   return { min, max };
 }
 
+/** The part with the most surface: the body the other colours are set into. */
+function biggestPart(tris: Tri[], part: Uint16Array): number {
+  const area = new Map<number, number>();
+  part.forEach((p, t) => area.set(p, (area.get(p) ?? 0) + tris[t].area));
+  return [...area].sort((a, b) => b[1] - a[1])[0][0];
+}
+
 /** Bounding box of each colour part. */
 function partBoxes(tris: Tri[], part: Uint16Array) {
   const by = new Map<number, number[]>();
@@ -206,8 +213,8 @@ function touching(bodies: number[][], tris: Tri[]): number[][] {
 // ---- the checks ----
 
 /**
- * `part` (per triangle, from 1) marks a multi-colour model: the first part is the
- * body, later ones are colour set into it. They print fused, so parts that touch
+ * `part` (per triangle, from 1) marks a multi-colour model: the biggest part is the
+ * body, the others are colour set into it. They print fused, so parts that touch
  * count as one piece, and a colour inlay is skin-deep, not a wall.
  */
 export function check(pos: Float32Array, opts: { supports?: boolean; part?: Uint16Array | null } = {}): CheckReport {
@@ -216,6 +223,7 @@ export function check(pos: Float32Array, opts: { supports?: boolean; part?: Uint
   const adj = adjacency(pos);
   const findings: Finding[] = [];
   const part = opts.part ?? null;
+  const body = part ? biggestPart(tris, part) : 0;
 
   // solids: more than one body means something came apart
   const bodies = (part ? touching(components(adj), tris) : components(adj)).sort((a, b) => b.length - a.length);
@@ -269,7 +277,7 @@ export function check(pos: Float32Array, opts: { supports?: boolean; part?: Uint
 
   // thin walls: cast inward from face samples, look for the far side
   const grid = new RayGrid(pos, Math.max(2, Math.cbrt((size[0] * size[1] * size[2]) / 20000)));
-  const order = tris.map((_, i) => i).filter((t) => !part || part[t] <= 1) // colour inlays are skin-deep
+  const order = tris.map((_, i) => i).filter((t) => !part || part[t] === body) // colour inlays are skin-deep
     .sort((a, b) => tris[b].area - tris[a].area).slice(0, 4000);
   let thinnest = Infinity, thinAt: [number, number, number] = [0, 0, 0], thinCount = 0, thinArea = 0;
   for (const t of order) {

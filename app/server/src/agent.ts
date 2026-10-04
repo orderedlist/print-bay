@@ -234,8 +234,8 @@ OpenSCAD conventions (the app depends on these):
   Thin plate-like walls in 1.8 mm (two perimeters a side); keep solid members compact (the slicer prints them as shells).
 - Multi-colour (the K2's CFS swaps filament within a layer, so colours print fused as ONE piece; never split a part
   for colour): add \`part = "all";\` and wrap each colour's geometry in \`if (part == "all" || part == "<name>")\`, laid out exactly
-  where it sits in the finished part (an inlay fills its recess with no gap). List the parts in the job file, body first:
-  [parts] then \`<name> = "<colour>"\` lines (filament 1, 2, ... in that order). The app renders each part with -D part="<name>"
+  where it sits in the finished part (an inlay fills its recess with no gap). List the parts in the job file in print order
+  ([parts] then \`<name> = "<colour>"\` lines; filament 1, 2, ...): each layer starts with the first, so put a face-down inlay first. The app renders each part with -D part="<name>"
   and slices them as one object. Keep colour where it's seen: for a face inlay printed face down, one or two layers
   (0.2-0.4 mm) is enough and saves filament swaps.
 - End with an echo of the overall size, e.g. echo(str("Size ", W, " x ", D, " x ", H, " mm")).

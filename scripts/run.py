@@ -16,7 +16,9 @@ CFS slot holds it. A multi-colour OpenSCAD job lists its parts instead:
   x    = "blue"
 
 The parts are sliced as one object with a filament each, so the colours print
-together layer by layer and come off the bed as one piece.
+together layer by layer and come off the bed as one piece. Each layer starts
+with the first part listed, so list what should go down first (a face-down
+inlay) first.
 
 Set ORCA to your OrcaSlicer binary if it isn't at the macOS default.
 """
@@ -67,7 +69,8 @@ def slice_job(job):
     out = ROOT / "gcode" / job["name"]
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
-    process, filaments = p["process"], [p["filament"]]
+    # the job's [overrides.process] go on top every slice, so a job can tune a shared profile
+    process, filaments = with_overrides(p["process"], job.get("overrides", {}).get("process", {}), out), [p["filament"]]
     parts = job.get("parts")
     if parts:
         if model.suffix != ".scad":
@@ -75,17 +78,23 @@ def slice_job(job):
         rendered = [(name, render_scad(model, out / f"part-{name}.stl", {**job.get("scad", {}), "part": f'"{name}"'}), i)
                     for i, name in enumerate(parts, 1)]
         model = parts3mf.write(rendered, out / "model.3mf", job["name"])
-        process, filaments = multi_filament(p["process"], p["filament"], list(parts.values()), out)
+        process, filaments = multi_filament(process, p["filament"], list(parts.values()), out)
     elif model.suffix == ".scad":
-        model = render_scad(model, out / "model.stl", job.get("scad", {}))
+        stl = render_scad(model, out / "model.stl", job.get("scad", {}))
+        model = parts3mf.write([(job["name"], stl, 1)], out / "model.3mf", job["name"])
     elif model.suffix == ".3mf":
         model = single_filament(model, out / "model.3mf")
 
+    # OpenSCAD models arrive centred and laid out as the .scad intends (see parts3mf); Orca's
+    # auto-arrange would spin them (a 45-degree turn of a two-colour inlay, say), so it's off
+    # for those. Downloaded 3MFs keep Orca's placement.
+    placed = job["model"].endswith(".scad")
     cmd = [
         ORCA,
         "--load-settings", f"{p['machine']};{process}",
         "--load-filaments", ";".join(str(f) for f in filaments),
         "--slice", "0",
+        *(["--arrange", "0", "--orient", "0"] if placed else []),
         "--outputdir", str(out),
         str(model),
     ]
@@ -118,6 +127,14 @@ def hex_for(color):
     return COLORS.get(color.lower(), color if color.startswith("#") else f"#{color}")
 
 
+def with_overrides(process, overrides, out):
+    if not overrides:
+        return process
+    f = out / "process.json"
+    f.write_text(json.dumps({**json.loads(Path(process).read_text()), **{k: str(v) for k, v in overrides.items()}}))
+    return f
+
+
 def multi_filament(process, filament, colors, out):
     """A filament profile per part, coloured like it, and the purge table to go with them.
 
@@ -134,6 +151,8 @@ def multi_filament(process, filament, colors, out):
     proc = json.loads(Path(process).read_text())
     proc["flush_volumes_matrix"] = ["0" if i == j else "280" for i in range(n) for j in range(n)]
     proc["flush_volumes_vector"] = ["140"] * (2 * n)
+    # the first layer goes down in [parts] order (Orca otherwise picks, e.g. the disc before its inlay)
+    proc["first_layer_print_sequence"] = [str(i) for i in range(1, n + 1)]
     f = out / "process.json"
     f.write_text(json.dumps(proc))
     return f, files
