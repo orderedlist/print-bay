@@ -8,6 +8,7 @@ import { Params } from "../components/Params";
 import { ICONS, Toolbar, type Action } from "../components/Toolbar";
 import type { Theme } from "../theme";
 import { IDLE_STATES, type AgentSession, type CheckReport, type Model, type ScadParam } from "../types";
+import { plateFit } from "../plate";
 import { stateLabel } from "./PrinterPanel";
 
 // Common revisions, offered as starting points in the Claude tab.
@@ -127,7 +128,8 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   // ---- slicing ----
   const log = job ? live.slice[job.name] ?? [] : [];
   const slicing = !!job && (job.slicing || log.at(-1)?.state === "running");
-  const slice = () => job && api(`/api/jobs/${job.name}/slice`, { method: "POST" }).catch((e) => toast(e.message, true));
+  const [perPlate, setPerPlate] = useState(1); // copies laid out on one plate
+  const slice = () => job && api(`/api/jobs/${job.name}/slice`, { method: "POST", json: { perPlate } }).catch((e) => toast(e.message, true));
 
   // ---- parameters ----
   const [params, setParams] = useState<ScadParam[]>([]);
@@ -171,7 +173,24 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   const chosen = chosenAll.every(Boolean) ? chosenAll[0] : undefined;
   const colorsText = chosenAll.map((c) => (c ? colorName(c.color).toLowerCase() : "?")).join(" and ");
   const idle = status ? IDLE_STATES.has(status.state) : false;
-  const stats = job?.stats;
+  // how many fit on one plate (OpenSCAD models: the slicer lays them out), from the size as printed
+  const fit = model.kind === "scad" && checks ? plateFit(checks.size[0], checks.size[1], multi) : 1;
+  useEffect(() => { if (perPlate > fit) setPerPlate(fit); }, [fit]); // eslint-disable-line react-hooks/exhaustive-deps
+  const plate = perPlate > 1 ? job?.plates.find((p) => p.perPlate === perPlate) : undefined;
+  const exact = perPlate === 1 ? job?.stats : plate && !plate.stale ? plate.stats : null;
+  // until a full plate is sliced, scale one copy (an overestimate: copies share travel and colour swaps)
+  const stats = exact ?? (job?.stats && perPlate > 1
+    ? { ...job.stats, seconds: job.stats.seconds * perPlate, grams: job.stats.grams * perPlate, cost: { ...job.stats.cost, total: job.stats.cost.total * perPlate } }
+    : null);
+  const estimated = !!stats && !exact;
+  // slice the plate as soon as the count settles, so the real time replaces the estimate
+  const failed = log.at(-1)?.state === "failed";
+  useEffect(() => {
+    if (perPlate <= 1 || exact || slicing || failed || !job) return; // after a failure, wait for "Try again"
+    const t = setTimeout(slice, 1200);
+    return () => clearTimeout(t);
+  }, [perPlate, !!exact, slicing]); // eslint-disable-line react-hooks/exhaustive-deps
+  const count = perPlate * copies;
   const submit = async (startNow: boolean) => {
     if (!job || !chosen) return;
     setConfirm(false);
@@ -179,8 +198,8 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
     try {
       const r = await api<{ started: boolean; queued: number }>("/api/print", {
         method: "POST", json: multi
-          ? { job: job.name, colors: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.color])), copies, startNow }
-          : { job: job.name, color: chosen.color, copies, startNow },
+          ? { job: job.name, colors: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.color])), copies, perPlate, startNow }
+          : { job: job.name, color: chosen.color, copies, perPlate, startNow },
       });
       const what = `${title(model.id)} in ${colorsText}`;
       toast(r.started
@@ -195,9 +214,9 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
     if (idle) setConfirm(true);
     else submit(false);
   };
-  const total = stats ? duration(stats.seconds * copies) : null;
+  const total = stats ? `${estimated ? "≈ " : ""}${duration(stats.seconds * copies)}` : null;
   const ctaLabel = sending ? (job?.stale ? "Slicing & sending…" : "Sending…")
-    : `${idle ? "Print" : "Queue"}${copies > 1 ? ` · ${copies} copies` : ""}${total ? ` · ${total}` : job?.stale ? " · slices first" : ""}`;
+    : `${idle ? "Print" : "Queue"}${count > 1 ? ` ${count}` : ""}${total ? ` · ${total}` : job?.stale ? " · slices first" : ""}`;
 
   const actions: Action[] = [
     { label: "Print…", icon: ICONS.print, run: print, disabled: !job || !chosen, accent: true },
@@ -302,11 +321,33 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
             </Section>
 
             <Section label="Copies">
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <button className="ibtn filled" onClick={() => setCopies(Math.max(1, copies - 1))} disabled={copies <= 1} aria-label="Fewer copies">−</button>
-                <span className="mono" style={{ fontSize: 18, width: 30, textAlign: "center" }} aria-live="polite">{copies}</span>
-                <button className="ibtn filled" onClick={() => setCopies(Math.min(20, copies + 1))} aria-label="More copies">+</button>
-                {copies > 1 && <span className="muted" style={{ marginLeft: "auto", fontSize: 12, textAlign: "right" }}>confirm a clear bed between copies</span>}
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {fit > 1 && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ flexGrow: 1 }}>On one plate</span>
+                    <div className="step mono" role="group" aria-label="Copies on one plate">
+                      <button onClick={() => setPerPlate(Math.max(1, perPlate - 1))} disabled={perPlate <= 1} aria-label="Fewer on the plate">−</button>
+                      <b>{perPlate}</b>
+                      <button onClick={() => setPerPlate(Math.min(fit, perPlate + 1))} disabled={perPlate >= fit} aria-label="More on the plate">+</button>
+                    </div>
+                    <button className="cta cta-sm" style={{ height: 30 }} disabled={perPlate === fit} onClick={() => setPerPlate(fit)}
+                      title={`As many as fit: ${fit}`}>Fill · {fit}</button>
+                  </div>
+                )}
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ flexGrow: 1 }}>{fit > 1 ? "Plates" : "Copies"}</span>
+                  <div className="step mono" role="group" aria-label={fit > 1 ? "Plates, one after another" : "Copies, one after another"}>
+                    <button onClick={() => setCopies(Math.max(1, copies - 1))} disabled={copies <= 1} aria-label="Fewer">−</button>
+                    <b>{copies}</b>
+                    <button onClick={() => setCopies(Math.min(20, copies + 1))} aria-label="More">+</button>
+                  </div>
+                </div>
+                {(perPlate > 1 || copies > 1) && (
+                  <div className="faint" style={{ fontSize: 12 }}>
+                    {perPlate > 1 && <>{perPlate} laid out in a grid on one plate{multi ? ", all sharing each colour swap" : ""}. </>}
+                    {copies > 1 && <>{copies} {fit > 1 ? "plates" : "copies"} one after another; you confirm a clear bed between them.</>}
+                  </div>
+                )}
               </div>
             </Section>
 
@@ -341,6 +382,11 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
                 <div className="tile"><div className="k">Filament</div><div className="v mono">{stats ? `${Math.round(stats.grams * copies)} g` : "—"}</div></div>
                 <div className="tile"><div className="k">Cost</div><div className="v mono">{stats ? money(stats.cost.total * copies) : "—"}</div></div>
               </div>
+              {estimated && !slicing && !failed && <div className="muted" style={{ marginTop: 10 }}>Estimated from one copy until the plate is sliced; a full plate shares
+                travel and colour swaps, so it comes out quicker.</div>}
+              {failed && !slicing && <div style={{ marginTop: 10, color: "var(--bad)" }}>Slicing failed.{" "}
+                <button className="link-btn" onClick={slice}>Try again</button>
+                <div className="log">{log.slice(-5).map((l) => l.line).join("\n")}</div></div>}
               {!job && <div className="muted" style={{ marginTop: 10 }}>No job file, so it can't be sliced or printed yet.</div>}
               {job && !stats && !slicing && <div className="muted" style={{ marginTop: 10 }}>Not sliced yet. It slices when you print, or <button className="link-btn" onClick={slice}>slice now</button>.</div>}
               {slicing && log.length > 0 && <div className="log" aria-live="polite">{log.slice(-4).map((l) => l.line).join("\n")}</div>}
@@ -407,9 +453,9 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
           <div className="panel dialog" role="dialog" aria-modal="true" aria-labelledby="bed-clear" onClick={(e) => e.stopPropagation()}>
             <h2 id="bed-clear">Is the bed clear?</h2>
             <div className="muted">
-              {title(model.id)} in {colorsText}{copies > 1 ? `, ${copies} copies` : ""}.
+              {count > 1 ? `${count} × ` : ""}{title(model.id)} in {colorsText}{perPlate > 1 ? `, ${perPlate} to a plate` : ""}{copies > 1 ? `, ${copies} plates` : ""}.
               The first copy starts as soon as it's sent{job?.stale ? " (it slices first)" : ""}.
-              {copies > 1 ? " You'll confirm a clear bed before each later copy." : ""}
+              {copies > 1 ? ` You'll confirm a clear bed before each later ${fit > 1 ? "plate" : "copy"}.` : ""}
             </div>
             <div className="grid2">
               <button className="cta cta-md" onClick={() => submit(false)}>Add to queue</button>

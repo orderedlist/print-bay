@@ -38,6 +38,7 @@ export interface ModelJob {
   copies: number;
   stats: Stats | null;
   stale: boolean; // model, job or profiles changed since the last slice
+  plates: { perPlate: number; stats: Stats | null; stale: boolean }[]; // sliced with several to a plate
 }
 
 export interface Model {
@@ -91,10 +92,11 @@ export function cost(grams: number, secs: number, r = rates()): Cost {
   return { filament: round(filament), power: round(power), total: round(filament + power) };
 }
 
-export const gcodePath = (job: string) => abs(`gcode/${job}.gcode`);
+/** gcode/<job>.gcode, or gcode/<job>-x<n>.gcode for n laid out on one plate (see scripts/run.py). */
+export const gcodePath = (job: string, perPlate = 1) => abs(`gcode/${perPlate > 1 ? `${job}-x${perPlate}` : job}.gcode`);
 
-export function gcodeStats(job: string, r = rates()): Stats | null {
-  const file = gcodePath(job);
+export function gcodeStats(job: string, r = rates(), perPlate = 1): Stats | null {
+  const file = gcodePath(job, perPlate);
   if (!fs.existsSync(file)) return null;
   const size = fs.statSync(file).size;
   const fd = fs.openSync(file, "r");
@@ -111,8 +113,8 @@ export function gcodeStats(job: string, r = rates()): Stats | null {
 }
 
 /** Anything the slice depends on that changed after it. */
-export function isStale(job: Job): boolean {
-  const sliced = mtime(gcodePath(job.name));
+export function isStale(job: Job, perPlate = 1): boolean {
+  const sliced = mtime(gcodePath(job.name, perPlate));
   if (!sliced) return true;
   const inputs = [job.model, job.file, ...Object.values(job.profiles)].map((p) => mtime(abs(p)));
   return inputs.some((t) => t > sliced);
@@ -148,6 +150,10 @@ export function listModels(): Model[] {
           copies: j.copies,
           stats: gcodeStats(j.name, r),
           stale: isStale(j),
+          plates: fs.readdirSync(abs("gcode"))
+            .map((f) => f.match(new RegExp(`^${j.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-x(\\d+)\\.gcode$`))?.[1])
+            .filter((n): n is string => !!n).map(Number).sort((a, b) => a - b)
+            .map((n) => ({ perPlate: n, stats: gcodeStats(j.name, r, n), stale: isStale(j, n) })),
         })),
       };
     });

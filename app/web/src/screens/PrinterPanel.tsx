@@ -70,7 +70,7 @@ export function PrinterPanel({ live, models, toast, openModel }: Props) {
                 <span className="row-title">{model ? title(model.id) : status.filename}</span>
                 <span className="row-sub" style={{ color: "var(--muted)" }}>
                   {status.layer.current != null ? `Layer ${status.layer.current} / ${status.layer.total ?? "?"}` : label}
-                  {active ? ` · ${active.copy} of ${active.of}` : ""}
+                  {active?.perPlate ? ` · ${active.perPlate} on the plate` : ""}{active && active.of > 1 ? ` · ${active.copy} of ${active.of}` : ""}
                 </span>
               </span>
               <span className="mono" style={{ fontSize: 20 }}>{pct}%</span>
@@ -131,7 +131,7 @@ export function PrinterPanel({ live, models, toast, openModel }: Props) {
                 <div key={e.id} className="row" style={{ cursor: "default" }}>
                   <span className="thumb thumb-sm">{m ? <Thumb model={m} /> : null}</span>
                   <span className="row-text">
-                    <span>{title(e.job)} <span className="faint">· {e.copy} of {e.of}</span></span>
+                    <span>{title(e.job)}{e.perPlate ? ` × ${e.perPlate}` : ""} <span className="faint">· {e.copy} of {e.of}</span></span>
                     <span className="row-sub">{(e.hexes ?? [e.hex]).map((h, k) => <span key={k} className="dot" style={{ width: 7, height: 7, background: h, marginRight: 5 }} />)}{colorsOf(e)} · {e.slot}{i === 0 && !idle ? " · after this print" : ""}</span>
                   </span>
                   <button className="ibtn" aria-label={`Remove ${title(e.job)} copy ${e.copy}`} title="Remove"

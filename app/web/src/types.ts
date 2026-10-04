@@ -29,6 +29,7 @@ export interface ModelJob {
   stats: Stats | null;
   stale: boolean;
   slicing: boolean;
+  plates: { perPlate: number; stats: Stats | null; stale: boolean }[]; // slices with several on one plate
 }
 
 export interface Model { id: string; file: string | null; kind: string | null; meshKey: string; source: string; jobs: ModelJob[] }
@@ -36,7 +37,7 @@ export interface Model { id: string; file: string | null; kind: string | null; m
 export interface ScadParam { name: string; default: string; value: string; comment: string }
 
 export interface QueueEntry {
-  id: string; job: string; color: string; hex: string; hexes?: string[]; slot: string; filename: string; copy: number; of: number;
+  id: string; job: string; color: string; hex: string; hexes?: string[]; slot: string; perPlate?: number; filename: string; copy: number; of: number;
 }
 export interface QueueState { active: QueueEntry | null; entries: QueueEntry[] }
 

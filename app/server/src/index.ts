@@ -79,14 +79,14 @@ export async function start(opts: StartOptions = {}) {
     publish("models", null);
     return scadParams(getJob(job.name));
   });
-  app.post<{ Params: { job: string } }>("/api/jobs/:job/slice", async (req, reply) => {
+  app.post<{ Params: { job: string }; Body: { perPlate?: number } | undefined }>("/api/jobs/:job/slice", async (req, reply) => {
     const job = getJob(req.params.job);
-    slice(job.name).catch(() => {}); // progress and failure arrive over SSE
+    slice(job.name, Math.max(1, Math.floor(req.body?.perPlate ?? 1))).catch(() => {}); // progress and failure arrive over SSE
     return reply.status(202).send({ ok: true });
   });
 
   // ---- printing ----
-  app.post<{ Body: { job: string; color?: string; colors?: Record<string, string>; copies: number; startNow: boolean } }>("/api/print", async (req) =>
+  app.post<{ Body: { job: string; color?: string; colors?: Record<string, string>; copies: number; perPlate?: number; startNow: boolean } }>("/api/print", async (req) =>
     print(req.body));
   app.get("/api/queue", async () => getQueue());
   app.post("/api/queue/next", async () => startNext());

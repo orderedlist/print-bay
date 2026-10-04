@@ -20,6 +20,7 @@ export interface QueueEntry {
   hex: string;
   hexes?: string[]; // every colour, for multi-colour prints
   slot: string;
+  perPlate?: number; // parts on each plate, when more than one
   filename: string; // already uploaded to the printer
   copy: number;
   of: number;
@@ -78,9 +79,10 @@ async function startEntry(entry: QueueEntry) {
  * `color` is the spool for a one-colour job; `colors` gives each part of a
  * multi-colour job its spool (by part name), defaulting to the job's own colours.
  */
-export async function print(opts: { job: string; color?: string; colors?: Record<string, string>; copies: number; startNow: boolean }) {
+export async function print(opts: { job: string; color?: string; colors?: Record<string, string>; copies: number; perPlate?: number; startNow: boolean }) {
   const job = getJob(opts.job);
-  const copies = Math.max(1, Math.min(20, Math.floor(opts.copies)));
+  const copies = Math.max(1, Math.min(20, Math.floor(opts.copies))); // plates, one after another
+  const perPlate = Math.max(1, Math.min(400, Math.floor(opts.perPlate ?? 1)));
   const status = await moonraker.getStatus();
   if (!status.online) throw fail("Can't reach the printer", 503);
   const colors = job.parts.length ? job.parts.map((p) => opts.colors?.[p.name] ?? p.color) : [opts.color ?? job.color ?? ""];
@@ -90,13 +92,14 @@ export async function print(opts: { job: string; color?: string; colors?: Record
   if (opts.startNow && !moonraker.IDLE_STATES.has(status.state))
     throw fail(`The printer is ${status.state}; add it to the queue instead`, 409);
 
-  if (isStale(job)) await slice(job.name);
-  const file = forSlots(gcodePath(job.name), slots);
+  if (isStale(job, perPlate)) await slice(job.name, perPlate);
+  const file = forSlots(gcodePath(job.name, perPlate), slots);
   await moonraker.upload(file);
 
   const entries = Array.from({ length: copies }, (_, i): QueueEntry => ({
     id: randomUUID(), job: job.name, color: colors.join(" + "), hex: slot.color,
     ...(slots.length > 1 ? { hexes: slots.map((s) => s.color) } : {}), slot: slots.map((s) => s.slot).join(" + "),
+    ...(perPlate > 1 ? { perPlate } : {}),
     filename: path.basename(file), copy: i + 1, of: copies,
   }));
   let started = false;

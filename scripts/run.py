@@ -7,6 +7,7 @@ run.py - slice a job with OrcaSlicer's CLI, then print it on the K2.
   python scripts/run.py jobs/stacking-box.toml --no-slice   # reuse existing G-code
   python scripts/run.py jobs/stacking-box.toml --copies 1   # override copy count
   python scripts/run.py jobs/stacking-box.toml --color red  # override the job's color
+  python scripts/run.py jobs/ball-marker.toml --per-plate 20 # 20 on the bed at once (OpenSCAD jobs)
 
 A job prints in its `color` (a name like "black" or a hex code) from whichever
 CFS slot holds it. A multi-colour OpenSCAD job lists its parts instead:
@@ -59,14 +60,21 @@ def load_job(path):
     return job
 
 
-def slice_job(job):
+def gcode_name(job, per_plate=1):
+    """gcode/<job>.gcode, or gcode/<job>-x<n>.gcode for n to a plate."""
+    return f"{job['name']}-x{per_plate}" if per_plate > 1 else job["name"]
+
+
+def slice_job(job, per_plate=1):
     model = ROOT / job["model"]
     p = {k: ROOT / v for k, v in job["profiles"].items()}
     for f in [model, *p.values()]:
         if not f.exists():
             sys.exit(f"Missing file: {f.relative_to(ROOT)}")
 
-    out = ROOT / "gcode" / job["name"]
+    if per_plate > 1 and model.suffix != ".scad":
+        sys.exit("Filling the plate works for OpenSCAD models; this one is a ready-made file.")
+    out = ROOT / "gcode" / gcode_name(job, per_plate)
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     # the job's [overrides.process] go on top every slice, so a job can tune a shared profile
@@ -77,11 +85,11 @@ def slice_job(job):
             sys.exit("[parts] needs an OpenSCAD model (each part renders with -D part=...)")
         rendered = [(name, render_scad(model, out / f"part-{name}.stl", {**job.get("scad", {}), "part": f'"{name}"'}), i)
                     for i, name in enumerate(parts, 1)]
-        model = parts3mf.write(rendered, out / "model.3mf", job["name"])
+        model = parts3mf.write(rendered, out / "model.3mf", job["name"], copies=per_plate)
         process, filaments = multi_filament(process, p["filament"], list(parts.values()), out)
     elif model.suffix == ".scad":
         stl = render_scad(model, out / "model.stl", job.get("scad", {}))
-        model = parts3mf.write([(job["name"], stl, 1)], out / "model.3mf", job["name"])
+        model = parts3mf.write([(job["name"], stl, 1)], out / "model.3mf", job["name"], copies=per_plate)
     elif model.suffix == ".3mf":
         model = single_filament(model, out / "model.3mf")
 
@@ -105,7 +113,7 @@ def slice_job(job):
         print(res.stdout[-2000:], res.stderr[-2000:], sep="\n")
         sys.exit("Slicing failed (output above).")
 
-    final = ROOT / "gcode" / f"{job['name']}.gcode"
+    final = ROOT / "gcode" / f"{gcode_name(job, per_plate)}.gcode"
     shutil.move(gcodes[-1], final)
     shutil.rmtree(out, ignore_errors=True)
     print(f"G-code: {final.relative_to(ROOT)}")
@@ -153,6 +161,9 @@ def multi_filament(process, filament, colors, out):
     proc["flush_volumes_vector"] = ["140"] * (2 * n)
     # the first layer goes down in [parts] order (Orca otherwise picks, e.g. the disc before its inlay)
     proc["first_layer_print_sequence"] = [str(i) for i in range(1, n + 1)]
+    # the prime tower goes in the back-right corner that parts3mf.grid() keeps clear
+    proc["wipe_tower_x"] = [str(parts3mf.TOWER[0] + 12)]
+    proc["wipe_tower_y"] = [str(parts3mf.TOWER[1] + 12)]
     f = out / "process.json"
     f.write_text(json.dumps(proc))
     return f, files
@@ -222,13 +233,14 @@ def main():
     ap.add_argument("--no-slice", action="store_true")
     ap.add_argument("--copies", type=int)
     ap.add_argument("--color")
+    ap.add_argument("--per-plate", type=int, default=1, help="lay this many out on the bed at once")
     a = ap.parse_args()
 
     job = load_job(a.job)
-    gcode = ROOT / "gcode" / f"{job['name']}.gcode"
+    gcode = ROOT / "gcode" / f"{gcode_name(job, a.per_plate)}.gcode"
 
     if not a.no_slice:
-        gcode = slice_job(job)
+        gcode = slice_job(job, a.per_plate)
     elif not gcode.exists():
         sys.exit(f"No G-code at {gcode.relative_to(ROOT)}; run without --no-slice.")
     if a.slice_only:
