@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
-import { CAMERA_URL, HOST, K2_HOST, PORT, WEB_DIST } from "./config.js";
+import { CAMERA_URL, HOST, K2_HOST, PORT, ROOT, WEB_DIST } from "./config.js";
 import { bus, publish } from "./events.js";
 import { getJob, listModels, rates, scadParams, setScadParams } from "./jobs.js";
 import { meshFor } from "./mesh.js";
@@ -26,6 +26,19 @@ export async function start(opts: StartOptions = {}) {
     publish("status", status);
   }, 2000);
   app.addHook("onClose", async () => clearInterval(poll));
+
+  // Files change outside the app too (CLI slices, nurb exports, hand edits):
+  // tell browsers to refresh models when they do, coalescing bursts.
+  let refresh: NodeJS.Timeout | null = null;
+  const watchers = ["models", "jobs", "gcode"].flatMap((dir) => {
+    try {
+      return [fs.watch(path.join(ROOT, dir), { recursive: true }, () => {
+        if (refresh) clearTimeout(refresh);
+        refresh = setTimeout(() => publish("models", null), 750);
+      })];
+    } catch { return []; }
+  });
+  app.addHook("onClose", async () => { for (const w of watchers) w.close(); });
 
   app.setErrorHandler((err: Error & { statusCode?: number }, _req, reply) => {
     reply.status(err.statusCode ?? 500).send({ error: err.message });
