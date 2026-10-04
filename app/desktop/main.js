@@ -13,7 +13,7 @@ async function createWindow() {
     backgroundColor: "#0a0a0b",
     title: "Print Bay",
     titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 46, y: 52 }, // inside the floating left panel, beside the brand
+    trafficLightPosition: { x: 27, y: 35 }, // in the left panel (10px in), level with the brand
     webPreferences: { contextIsolation: true, sandbox: true },
   });
   // Links out (model sources) open in the default browser, not the app window.

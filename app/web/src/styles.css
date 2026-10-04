@@ -90,8 +90,15 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 .brand { display: flex; align-items: center; gap: 12px; }
 .brand-name { font-weight: 600; letter-spacing: 0.02em; }
 
-/* macOS desktop: hidden title bar, traffic lights inside the left panel (app/desktop/main.js) */
-.desktop-mac .brand { padding-left: 64px; }
+/* macOS desktop: the window itself is the stage's frame, so the stage runs edge to edge and
+   the panels sit 10px in with a radius concentric with the window's corners. The traffic
+   lights sit in the left panel's brand row (trafficLightPosition in app/desktop/main.js). */
+.desktop-mac .ws { padding: 0; --gap: 10px; }
+.desktop-mac .stage-area { border-radius: 0; }
+.desktop-mac .side-panel { top: var(--gap); bottom: var(--gap); }
+.desktop-mac .left-panel { left: var(--gap); }
+.desktop-mac .inspector { right: var(--gap); }
+.desktop-mac .brand { padding-left: 66px; }
 .desktop-mac .drag { -webkit-app-region: drag; }
 .desktop-mac .drag button, .desktop-mac .drag a, .desktop-mac .drag input { -webkit-app-region: no-drag; }
 .desktop-mac .ws::before { content: ""; position: fixed; left: 0; right: 0; top: 0; height: var(--gap); -webkit-app-region: drag; z-index: 20; }
@@ -345,5 +352,6 @@ select.field { padding: 0 8px; }
   .left-panel { order: 2; }
   .creating .left-panel { height: 80vh; }
   .inspector .panel-body { max-height: 70vh; overflow-y: auto; }
+  .desktop-mac .ws { padding: 40px var(--gap) var(--gap); } /* room for the traffic lights */
   .desktop-mac .brand { padding-left: 0; }
 }
