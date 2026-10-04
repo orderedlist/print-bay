@@ -76,7 +76,8 @@ interface Props {
 /** A selected model: on the stage, with the bottom toolbar and the inspector beside it. */
 export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, shift, inspectorSlot, close, goPrinter, newModel, toast }: Props) {
   const job = model.jobs[0];
-  const canEdit = model.kind === "scad";
+  const drawn = !!model.file; // a model Claude is still creating has only its folder
+  const canEdit = model.kind === "scad" || !drawn;
   const status = live.status;
   const [mode, setMode] = useState<ViewMode>("model");
   const [available, setAvailable] = useState<ViewAvailability>({ model: true, paths: false, stress: false, layout: false });
@@ -89,13 +90,14 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   const [checking, setChecking] = useState(true);
   useEffect(() => {
     let alive = true;
+    if (!drawn) { setChecks(null); setChecking(false); return; }
     setChecking(true);
     api<CheckReport>(`/api/models/${model.id}/checks`)
       .then((r) => alive && setChecks(r))
       .catch(() => alive && setChecks(null))
       .finally(() => alive && setChecking(false));
     return () => { alive = false; };
-  }, [model.id, model.meshKey, live.modelsVersion]);
+  }, [model.id, model.meshKey, live.modelsVersion, drawn]);
   const issues = checks ? checks.findings.filter((f) => f.severity !== "info").length : 0;
 
   // ---- Claude ----
@@ -198,9 +200,17 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
 
   return (
     <>
-      <ModelViewer model={model} mode={mode} setMode={setMode} theme={theme} shift={shift}
-        onSize={setSize} onAvailable={setAvailable} checks={checks} />
-      <Toolbar actions={actions} mode={mode} available={available} setMode={setMode} theme={theme} toggleTheme={toggleTheme} />
+      {drawn ? (
+        <ModelViewer model={model} mode={mode} setMode={setMode} theme={theme} shift={shift}
+          onSize={setSize} onAvailable={setAvailable} checks={checks} />
+      ) : (
+        <div className="stage-hint">
+          {session?.running ? <span className="spinner" style={{ width: 28, height: 28, borderWidth: 3 }} /> : ICONS.spark}
+          <b>{session?.running ? "Claude is working on it" : "Not drawn yet"}</b>
+          <span style={{ fontSize: 12 }}>{session?.running ? "It shows up here once it's drawn" : "Answer Claude in the Claude tab"}</span>
+        </div>
+      )}
+      <Toolbar actions={actions} mode={drawn ? mode : null} available={available} setMode={setMode} theme={theme} toggleTheme={toggleTheme} />
 
       {inspectorSlot && createPortal(<aside className="panel side-panel inspector" aria-label={title(model.id)}>
         <div className="panel-head drag" style={{ padding: "14px 16px" }}>
@@ -339,7 +349,7 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
               <div className="sec muted">Claude can only edit OpenSCAD models. This one is a downloaded {model.kind?.toUpperCase()} mesh,
                 so its shape is fixed; <button className="link-btn" style={{ padding: 0 }} onClick={newModel}>start a new model</button> to have Claude design a version you can change.</div>
             ) : session ? (
-              <AgentPanel session={session} toast={toast} allowUploads starters={EDIT_STARTERS} onNewChat={() => openAgent(true)}
+              <AgentPanel session={session} toast={toast} allowUploads starters={drawn ? EDIT_STARTERS : undefined} onNewChat={() => openAgent(true)}
                 placeholder="Ask Claude to change this model…"
                 empty={<div className="muted" style={{ fontSize: 12.5 }}>
                   Claude edits <code>models/{model.id}/</code>{job ? <> and <code>{job.file}</code></> : null}, renders to check, and the

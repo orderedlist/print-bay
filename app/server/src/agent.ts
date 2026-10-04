@@ -76,7 +76,7 @@ export function getSession(id: string): AgentSession {
 export function latestFor(modelId: string): AgentSession | null {
   const all = fs.readdirSync(DIR).filter((f) => f.endsWith(".json"))
     .map((f) => getSession(f.slice(0, -5)))
-    .filter((s) => s.kind === "edit" && s.modelId === modelId)
+    .filter((s) => s.modelId === modelId) // edits, and the chat that created it
     .sort((a, b) => b.createdAt - a.createdAt);
   return all[0] ?? null;
 }
@@ -100,12 +100,14 @@ export function createSession(kind: "edit" | "new", modelId?: string): AgentSess
 
 // ---- uploads ----
 
-const IMAGE_TYPES: Record<string, string> = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif", "image/heic": ".heic" };
+const IMAGE_TYPES: Record<string, string> = {
+  "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif", "image/heic": ".heic", "image/svg+xml": ".svg",
+};
 
 export function saveUpload(id: string, type: string, body: Buffer): string {
   getSession(id);
   const ext = IMAGE_TYPES[type];
-  if (!ext) throw fail("Photos only (JPEG, PNG, WebP, GIF, HEIC)");
+  if (!ext) throw fail("Photos (JPEG, PNG, WebP, GIF, HEIC) or SVG drawings only");
   const dir = path.join(sessionDir(id), "uploads");
   fs.mkdirSync(dir, { recursive: true });
   const name = `${Date.now()}-${randomUUID().slice(0, 8)}${ext}`;
@@ -125,8 +127,44 @@ export function uploadPath(id: string, name: string) {
 function scopePaths(s: AgentSession): string[] {
   if (!s.modelId) return [];
   const paths = [`models/${s.modelId}`];
-  if (s.job) paths.push(`jobs/${s.job}.toml`);
+  const job = s.job ?? (s.kind === "new" ? s.modelId : null); // a new model's job is named after it
+  if (job) paths.push(`jobs/${job}.toml`);
   return paths;
+}
+
+// ---- naming a new model ----
+
+const slugify = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+
+/** A short name for what the user asked for: Claude (Haiku) if it answers quickly, else the first few words. */
+function nameFor(request: string): Promise<string> {
+  const fallback = () => {
+    const words = request.replace(/[^A-Za-z0-9 ]/g, " ").split(/\s+/)
+      .filter((w) => w && !/^(a|an|the|i|my|me|for|to|of|that|with|and|need|want|make|please|can|you|some|it)$/i.test(w));
+    return words.slice(0, 3).join(" ") || "New Model";
+  };
+  return new Promise((done) => {
+    const prompt = `Name this 3D-printable part in 2 to 4 words, Title Case, no punctuation, no quotes. Reply with the name only.\n\nRequest: ${request.slice(0, 600)}`;
+    const child = spawn(CLAUDE, ["-p", prompt, "--model", "haiku", "--permission-mode", "dontAsk"], { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    const timer = setTimeout(() => child.kill("SIGTERM"), 25_000);
+    child.stdout!.on("data", (c: Buffer) => { out += c.toString(); });
+    const finish = () => {
+      clearTimeout(timer);
+      const name = out.trim().split("\n")[0].replace(/["'`*.]/g, "").trim();
+      done(name && name.length <= 48 && slugify(name) ? name : fallback());
+    };
+    child.on("close", finish);
+    child.on("error", () => { clearTimeout(timer); done(fallback()); });
+  });
+}
+
+/** A folder name for a new model that isn't taken. */
+function freeSlug(name: string): string {
+  const base = slugify(name) || "new-model";
+  let slug = base;
+  for (let n = 2; fs.existsSync(path.join(ROOT, "models", slug)) || fs.existsSync(path.join(ROOT, "jobs", `${slug}.toml`)); n++) slug = `${base}-${n}`;
+  return slug;
 }
 
 function snapshot(s: AgentSession, turn: number) {
@@ -213,7 +251,8 @@ Design rules for parts that print and hold up (FDM, PLA):
 - In SOURCE.md keep short design notes, including what was tried and rejected (and why), so the next edit doesn't undo it.
 You cannot slice, print, run git, or touch other files; the app slices when the user asks. Don't suggest commands for the user to run.`;
 
-  if (s.kind === "edit") {
+  const drawn = s.modelId && fs.readdirSync(path.join(ROOT, "models", s.modelId)).some((f) => f.endsWith(".scad"));
+  if (s.kind === "edit" || drawn) {
     return `${common}
 
 You are editing the model in models/${s.modelId}/${s.job ? ` (its job file is jobs/${s.job}.toml)` : ""}. Change only those files.
@@ -222,12 +261,13 @@ Make the change the user asks for, keep the parameter block editable, render to 
   }
   return `${common}
 
-You are creating a NEW model. First, unless the request already pins it down, ask one short round of questions:
+You are creating a NEW model. The app already named it and made its folder, models/${s.modelId}/ (with a placeholder SOURCE.md);
+the user sees it in their library. First, unless the request already pins it down, ask one short round of questions:
 what it's for, what it must fit (key dimensions, in the user's units), and anything about mounting or strength. Use any photos for proportions,
 and say what you're assuming. Then create:
-- models/<slug>/<slug>.scad   (slug: short, lowercase, hyphenated; must not already exist)
-- models/<slug>/SOURCE.md     ("# <Title>", then bullets: what it is, key dimensions, "Designed in Print Bay with Claude")
-- jobs/<slug>.toml            copy the structure of jobs/tote-rack.toml (name, model, color = "black", copies = 1, [profiles], [presets],
+- models/${s.modelId}/${s.modelId}.scad
+- models/${s.modelId}/SOURCE.md     (replace the placeholder: "# <Title>", then bullets: what it is, key dimensions, "Designed in Print Bay with Claude")
+- jobs/${s.modelId}.toml            copy the structure of jobs/tote-rack.toml (name, model, color = "black", copies = 1, [profiles], [presets],
                               [overrides.machine], [overrides.process]; enable_support = "0" unless it truly needs supports)
 Render to verify, then tell the user it's ready and what they can tweak.`;
 }
@@ -235,17 +275,15 @@ Render to verify, then tell the user it's ready and what they can tweak.`;
 function allowedTools(s: AgentSession): string[] {
   const read = ["Read", "Glob", "Grep", `Bash(${OPENSCAD}:*)`, "Bash(openscad:*)",
     "Bash(node app/server/dist/check-cli.js:*)", `Bash(node ${ROOT}/app/server/dist/check-cli.js:*)`];
-  if (s.kind === "edit") {
-    const m = `models/${s.modelId}`;
-    return [...read, `Edit(${m}/**)`, `Write(${m}/**)`, ...(s.job ? [`Edit(jobs/${s.job}.toml)`] : [])];
-  }
-  return [...read, "Write(models/**)", "Edit(models/**)", "Write(jobs/**)", "Edit(jobs/**)", "Bash(mkdir:*)"];
+  const m = `models/${s.modelId}`;
+  if (s.kind === "edit") return [...read, `Edit(${m}/**)`, `Write(${m}/**)`, ...(s.job ? [`Edit(jobs/${s.job}.toml)`] : [])];
+  return [...read, `Edit(${m}/**)`, `Write(${m}/**)`, `Write(jobs/${s.modelId}.toml)`, `Edit(jobs/${s.modelId}.toml)`];
 }
 
 function toolLabel(name: string, input: any): string {
   const file = input?.file_path ? path.basename(input.file_path) : "";
   switch (name) {
-    case "Read": return /\.(jpe?g|png|webp|gif|heic)$/i.test(file) ? "Looked at a photo" : `Read ${file}`;
+    case "Read": return /\.(jpe?g|png|webp|gif|heic)$/i.test(file) ? "Looked at a photo" : /\.svg$/i.test(file) ? "Read the drawing" : `Read ${file}`;
     case "Edit": return `Edited ${file}`;
     case "Write": return `Wrote ${file}`;
     case "Glob": case "Grep": return "Searched the repo";
@@ -264,15 +302,63 @@ export function send(id: string, text: string, uploads: string[] = [], shown?: s
   const files = uploads.map((u) => uploadPath(s.id, u));
 
   s.turns++;
-  snapshot(s, s.turns);
   s.transcript.push({ role: "user", text: shown ?? text, uploads });
   s.running = true;
+  let prompt = text.trim() || "Here are some files.";
+  const photos = files.filter((f) => !f.endsWith(".svg"));
+  const svgs = files.filter((f) => f.endsWith(".svg"));
+  if (photos.length) prompt += `\n\nPhotos from the user (read them): ${photos.join(", ")}`;
+
+  if (s.kind === "new" && !s.modelId) {
+    // name it and make its folder first, so the app can open it while Claude works
+    s.transcript.push({ role: "note", text: "Naming it…" });
+    emit(s, true);
+    nameFor(text.trim() || "a part from photos").then((name) => {
+      s.transcript = s.transcript.filter((e) => !(e.role === "note" && e.text === "Naming it…"));
+      try {
+        s.modelId = freeSlug(name);
+        snapshot(s, s.turns); // before the folder exists, so undoing this turn removes it
+        fs.mkdirSync(path.join(ROOT, "models", s.modelId));
+        fs.writeFileSync(path.join(ROOT, "models", s.modelId, "SOURCE.md"), `# ${name}\n\n- Being designed in Print Bay with Claude.\n`);
+      } catch (err) {
+        s.modelId = null;
+        s.turns--;
+        s.running = false;
+        s.transcript.push({ role: "note", error: true, text: `Couldn't create the model: ${(err as Error).message}` });
+        save(s);
+        emit(s, true);
+        return;
+      }
+      emit(s, true);
+      publish("models", null);
+      run(s, prompt + attachSvgs(s, svgs));
+    });
+    return s;
+  }
+  snapshot(s, s.turns);
   emit(s, true);
+  run(s, prompt + attachSvgs(s, svgs));
+  return s;
+}
 
-  let prompt = text.trim() || "Here are some photos.";
-  if (files.length) prompt += `\n\nPhotos from the user (read them): ${files.join(", ")}`;
-  const modelsBefore = new Set(fs.readdirSync(path.join(ROOT, "models")));
+/**
+ * SVG drawings are copied into the model's folder (after the turn's snapshot, so undo
+ * removes them), where OpenSCAD's import() can reach them by a relative path.
+ */
+function attachSvgs(s: AgentSession, svgs: string[]): string {
+  if (!svgs.length || !s.modelId) return "";
+  const names = svgs.map((file) => {
+    const base = path.basename(file).replace(/^\d+-[0-9a-f]{8}/, "drawing");
+    fs.copyFileSync(file, path.join(ROOT, "models", s.modelId!, base));
+    return `models/${s.modelId}/${base}`;
+  });
+  return `\n\nSVG drawings from the user, copied into the model folder: ${names.join(", ")}
+Read them for the shape. To use one as geometry, import it relative to the .scad, e.g. linear_extrude(h) import("${path.basename(names[0])}");
+SVG units: OpenSCAD reads 1 px as 1 mm unless the file sets a width/height in mm; check the size with an echo or a render and scale to the dimensions the user gave.`;
+}
 
+/** One `claude -p` turn, streaming into the transcript. */
+function run(s: AgentSession, prompt: string) {
   const args = [
     "-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages",
     "--permission-mode", "dontAsk", "--allowedTools", ...allowedTools(s),
@@ -337,10 +423,7 @@ export function send(id: string, text: string, uploads: string[] = [], shown?: s
     if (stopping.delete(s.id)) note = { role: "note", text: "Stopped." };
     s.running = false;
     if (note) s.transcript.push(note);
-    if (s.kind === "new" && !s.modelId) {
-      const created = fs.readdirSync(path.join(ROOT, "models")).find((m) => !modelsBefore.has(m));
-      if (created) { s.modelId = created; s.job = jobFor(created); }
-    } else if (s.modelId && !s.job) s.job = jobFor(s.modelId);
+    if (s.modelId && !s.job) s.job = jobFor(s.modelId);
     save(s);
     emit(s, true);
     publish("models", null);
@@ -355,7 +438,6 @@ export function send(id: string, text: string, uploads: string[] = [], shown?: s
     }
     finish();
   });
-  return s;
 }
 
 /**
@@ -365,7 +447,7 @@ export function send(id: string, text: string, uploads: string[] = [], shown?: s
  */
 export async function review(id: string): Promise<AgentSession> {
   const s = getSession(id);
-  if (s.kind !== "edit" || !s.modelId) throw fail("Reviews run on an existing model", 400);
+  if (!s.modelId) throw fail("Reviews run on an existing model", 400);
   let findings = "Couldn't run the checks; run them yourself first.";
   try {
     const r = await checkModel(s.modelId);

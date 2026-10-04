@@ -16,5 +16,6 @@ export function Thumb({ model }: { model: Model }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model.meshKey]);
   if (url) return <img src={url} alt="" />;
+  if (!model.file) return <span aria-label="Not drawn yet">✦</span>; // a new model Claude hasn't drawn yet
   return failed ? <span aria-label="No preview">—</span> : <span className="spinner" aria-label="Rendering preview" />;
 }

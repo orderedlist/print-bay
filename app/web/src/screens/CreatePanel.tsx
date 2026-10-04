@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { api, title, useAgentSession, type Live } from "../api";
+import { api, useAgentSession, type Live } from "../api";
 import { AgentPanel } from "../components/AgentPanel";
-import { Thumb } from "../components/Thumb";
-import type { AgentSession, Model } from "../types";
+import { ICONS } from "../components/Toolbar";
+import type { AgentSession } from "../types";
 
 const KEY = "printbay.newModelSession";
 
@@ -25,65 +25,63 @@ function remember(id: string) {
 
 interface Props {
   live: Live;
-  models: Model[];
-  back: () => void;
-  openModel: (id: string) => void;
-  /** The model Claude made, to show on the stage while the chat goes on. */
-  onModel: (id: string | null) => void;
+  close: () => void;
+  /** The first message named and created the model: open it, chat and all. */
+  created: (modelId: string) => void;
   toast: (msg: string, error?: boolean) => void;
 }
 
-/** "Create with Claude": a chat that designs a new OpenSCAD model. */
-export function CreatePanel({ live, models, back, openModel, onModel, toast }: Props) {
+/**
+ * "Create with Claude", in the inspector's place. The first message names the
+ * model and creates it; from then on the chat lives in that model's Claude tab.
+ */
+export function CreatePanel({ live, close, created, toast }: Props) {
   const [id, setId] = useState<string | null>(null);
   const session = useAgentSession(id, live);
-  const model = session?.modelId ? models.find((m) => m.id === session.modelId) : undefined;
-  useEffect(() => { onModel(model?.id ?? null); }, [model?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const start = async (fresh: boolean) => {
-    try {
-      let s: AgentSession | null = null;
-      const previous = fresh ? null : stored();
-      if (previous) s = await api<AgentSession>(`/api/agent/${previous}`).catch(() => null);
-      s ??= await api<AgentSession>("/api/agent", { method: "POST", json: { kind: "new" } });
-      remember(s.id);
-      setId(s.id);
-    } catch (e) { toast((e as Error).message, true); }
-  };
-  useEffect(() => { start(false); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { // an unsent draft chat (photos added, say) is picked up again; otherwise a fresh one
+    (async () => {
+      try {
+        const previous = stored();
+        let s = previous ? await api<AgentSession>(`/api/agent/${previous}`).catch(() => null) : null;
+        if (!s || s.modelId || s.turns) s = await api<AgentSession>("/api/agent", { method: "POST", json: { kind: "new" } });
+        remember(s.id);
+        setId(s.id);
+      } catch (e) { toast((e as Error).message, true); }
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { if (session?.modelId) created(session.modelId); }, [session?.modelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div className="sec">
-        <button className="sech" onClick={back} aria-label="Back to models">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="m15 6-6 6 6 6" /></svg>
-          Create with Claude
-        </button>
-        {model && (
-          <button className="row" style={{ marginTop: 10, background: "var(--panel2)" }} onClick={() => openModel(model.id)}>
-            <span className="thumb"><Thumb model={model} /></span>
-            <span className="row-text">
-              <span className="row-title">{title(model.id)}</span>
-              <span className="row-sub">Open to tweak, slice and print</span>
-            </span>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+    <aside className="panel side-panel inspector" aria-label="New model">
+      <div className="panel-head drag" style={{ padding: "14px 16px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className="ico" style={{ color: "var(--acc)" }}>{ICONS.spark}</span>
+          <div style={{ flexGrow: 1 }}>
+            <h1 style={{ fontSize: 15 }}>New model</h1>
+            <div className="muted" style={{ fontSize: 12 }}>Designed with Claude</div>
+          </div>
+          <button className="ibtn" onClick={close} aria-label="Close" title="Close">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
           </button>
-        )}
+        </div>
       </div>
-      {session ? (
-        <AgentPanel session={session} toast={toast} allowUploads starters={session.transcript.length ? undefined : STARTERS}
-          onNewChat={() => { onModel(null); start(true); }}
-          placeholder="Describe what it's for and what it has to fit…"
-          empty={<div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div style={{ border: "1px dashed var(--line)", borderRadius: 12, padding: 18, textAlign: "center", background: "var(--panel2)", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 16-5-5-8 8" /></svg>
-              <div>Drop photos of the space or the part</div>
-              <div className="faint" style={{ fontSize: 12 }}>or paste them into the message</div>
-            </div>
-            <div className="muted" style={{ fontSize: 12.5 }}>Claude asks a few questions first, then designs a parametric OpenSCAD model sized for the K2,
-              with a job file so it prints like everything else. It shows up on the stage as it goes.</div>
-          </div>} />
-      ) : <div className="sec agent-note"><span className="spinner" /> Starting…</div>}
-    </div>
+      <div className="panel-body" style={{ display: "flex", flexDirection: "column" }}>
+        {session ? (
+          <AgentPanel session={session} toast={toast} allowUploads starters={session.transcript.length ? undefined : STARTERS}
+            placeholder="Describe what it's for and what it has to fit…"
+            empty={<div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ border: "1px dashed var(--line)", borderRadius: 12, padding: 18, textAlign: "center", background: "var(--panel2)", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 16-5-5-8 8" /></svg>
+                <div>Drop photos of the space or the part</div>
+                <div className="faint" style={{ fontSize: 12 }}>or an SVG drawing to build from · paste works too</div>
+              </div>
+              <div className="muted" style={{ fontSize: 12.5 }}>Your first message names the model and adds it to the library. Claude asks
+                a few questions, then designs a parametric OpenSCAD model sized for the K2, with a job file so it prints like everything else.</div>
+            </div>} />
+        ) : <div className="sec agent-note"><span className="spinner" /> Starting…</div>}
+      </div>
+    </aside>
   );
 }

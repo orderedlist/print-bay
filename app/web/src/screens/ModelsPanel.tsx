@@ -40,7 +40,8 @@ export const ModelsPanel = forwardRef<HTMLInputElement, Props>(function ModelsPa
           <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 10 }}>
             {shown.map((m) => {
               const job = m.jobs[0];
-              const [dot, why] = !job ? ["var(--faint)", "no job file"]
+              const [dot, why] = !m.file ? ["var(--acc)", "being designed"]
+                : !job ? ["var(--faint)", "no job file"]
                 : job.slicing ? ["var(--acc)", "slicing"]
                   : !job.stats ? ["var(--faint)", "not sliced"]
                     : job.stale ? ["var(--warn)", "changed since slice"] : ["var(--ok)", "sliced"];
@@ -49,7 +50,7 @@ export const ModelsPanel = forwardRef<HTMLInputElement, Props>(function ModelsPa
                   <span className="thumb"><Thumb model={m} /></span>
                   <span className="row-text">
                     <span className="row-title">{title(m.id)}</span>
-                    <span className="row-sub">{m.kind?.toUpperCase() ?? "—"} · {job?.stats ? job.stats.time.replace(/ \d+s$/, "") : why}</span>
+                    <span className="row-sub">{m.kind?.toUpperCase() ?? "NEW"} · {job?.stats ? job.stats.time.replace(/ \d+s$/, "") : why}</span>
                   </span>
                   <span className="dot" style={{ background: dot }} title={why} />
                 </button>

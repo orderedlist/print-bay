@@ -110,7 +110,9 @@ export async function start(opts: StartOptions = {}) {
     ({ name: agent.saveUpload(req.params.id, String(req.headers["content-type"]), req.body) }));
   app.get<{ Params: { id: string; name: string } }>("/api/agent/:id/uploads/:name", async (req, reply) => {
     const file = agent.uploadPath(req.params.id, req.params.name);
-    const ext = path.extname(file).slice(1).replace("jpg", "jpeg");
+    const ext = path.extname(file).slice(1).replace("jpg", "jpeg").replace("svg", "svg+xml");
+    // an uploaded SVG could carry script: never let it run if opened directly
+    if (ext === "svg+xml") reply.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:");
     return reply.type(`image/${ext}`).header("Cache-Control", "max-age=86400").send(fs.createReadStream(file));
   });
 

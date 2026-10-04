@@ -65,7 +65,7 @@ export function AgentPanel({ session, placeholder, allowUploads, empty, starters
 
   const upload = async (files: Iterable<File>) => {
     for (const file of files) {
-      if (!file.type.startsWith("image/")) { toast(`${file.name} isn't a photo`, true); continue; }
+      if (!file.type.startsWith("image/")) { toast(`${file.name} isn't a photo or an SVG`, true); continue; }
       setUploading((n) => n + 1);
       try {
         const { name } = await api<{ name: string }>(`${base}/uploads`, { method: "POST", body: file, headers: { "Content-Type": file.type } });
@@ -98,7 +98,7 @@ export function AgentPanel({ session, placeholder, allowUploads, empty, starters
           if (entry.role === "user") return (
             <div key={i} className="agent-user">
               {entry.uploads.length > 0 && (
-                <div className="agent-photos">{entry.uploads.map((u) => <img key={u} src={`${base}/uploads/${u}`} alt="Attached photo" />)}</div>
+                <div className="agent-photos">{entry.uploads.map((u) => <img key={u} src={`${base}/uploads/${u}`} alt={u.endsWith(".svg") ? "Attached drawing" : "Attached photo"} />)}</div>
               )}
               {entry.text && <div>{entry.text}</div>}
             </div>
@@ -135,8 +135,8 @@ export function AgentPanel({ session, placeholder, allowUploads, empty, starters
             onPaste={allowUploads ? (e) => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); upload(files); } } : undefined}
             onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } }} />
           {allowUploads && <>
-            <input ref={fileInput} type="file" accept="image/*" multiple hidden onChange={(e) => { if (e.target.files) upload(e.target.files); e.target.value = ""; }} />
-            <button className="ibtn" onClick={() => fileInput.current?.click()} aria-label="Add photos" title="Add photos">
+            <input ref={fileInput} type="file" accept="image/*,.svg" multiple hidden onChange={(e) => { if (e.target.files) upload(e.target.files); e.target.value = ""; }} />
+            <button className="ibtn" onClick={() => fileInput.current?.click()} aria-label="Add photos or SVGs" title="Add photos or SVG drawings">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 16-5-5-8 8" /></svg>
             </button>
           </>}

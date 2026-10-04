@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLive, useModels } from "./api";
 import { Camera } from "./components/Camera";
-import { ModelViewer } from "./components/ModelViewer";
 import { ICONS, Toolbar } from "./components/Toolbar";
 import { CreatePanel } from "./screens/CreatePanel";
 import { ModelsPanel } from "./screens/ModelsPanel";
@@ -22,7 +21,7 @@ function parseRoute(hash: string): Route {
 
 interface Toast { id: number; msg: string; error: boolean }
 
-const LEFT_W = 300, CREATE_W = 360, RIGHT_W = 320, GAP = 14;
+const LEFT_W = 300, RIGHT_W = 320, GAP = 14;
 
 function useNarrow() {
   const query = "(max-width: 820px)";
@@ -43,7 +42,6 @@ export function App() {
   const narrow = useNarrow();
   const [route, setRoute] = useState<Route>(() => parseRoute(location.hash));
   const [tab, setTab] = useState<InspectorTab>("print");
-  const [created, setCreated] = useState<string | null>(null); // the model a Create chat made
   const [toasts, setToasts] = useState<Toast[]>([]);
   const search = useRef<HTMLInputElement>(null);
   const [inspectorSlot, setInspectorSlot] = useState<HTMLDivElement | null>(null);
@@ -77,33 +75,27 @@ export function App() {
 
   const selectedId = route.left === "models" ? route.id : null;
   const selected = selectedId ? models?.find((m) => m.id === selectedId) : undefined;
-  const preview = route.left === "create" && created ? models?.find((m) => m.id === created) : undefined;
-  const leftW = route.left === "create" ? CREATE_W : LEFT_W;
-  const rightW = selected ? RIGHT_W : 0;
-  const shift = narrow ? 0 : ((leftW + GAP) - (rightW ? rightW + GAP : 0)) / 2;
+  const creating = route.left === "create";
+  const rightW = selected || creating ? RIGHT_W : 0;
+  const shift = narrow ? 0 : ((LEFT_W + GAP) - (rightW ? rightW + GAP : 0)) / 2;
   const [, stateColor] = stateLabel(live.status?.state ?? "offline");
   const newModelActions = [{ label: "New model with Claude", icon: ICONS.plus, run: () => go("/create") }];
   const n = models?.length ?? 0;
 
   return (
-    <div className={`ws${selected ? " with-inspector" : ""}${route.left === "create" ? " creating" : ""}`}>
+    <div className={`ws${rightW ? " with-inspector" : ""}`}>
       <main className="stage-area" aria-label="Stage">
         {route.left === "printer" ? (
           <Camera />
         ) : selected ? (
           <ModelWorkspace key={selected.id} model={selected} live={live} tab={tab} setTab={setTab} theme={theme} toggleTheme={toggleTheme}
             shift={shift} inspectorSlot={inspectorSlot} close={() => go("/models")} goPrinter={() => go("/printer")} newModel={() => go("/create")} toast={toast} />
-        ) : preview ? (
-          <>
-            <ModelViewer key={preview.id} model={preview} mode="model" setMode={() => {}} theme={theme} shift={shift} />
-            <Toolbar actions={newModelActions} mode={null} theme={theme} toggleTheme={toggleTheme} />
-          </>
         ) : (
           <>
             <div className="stage-hint">
               {route.left === "create" ? (
                 <><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" /></svg>
-                  <b>The new model appears here</b><span style={{ fontSize: 12 }}>once Claude has drawn it</span></>
+                  <b>Describe the part to Claude</b><span style={{ fontSize: 12 }}>It shows up here once it's drawn</span></>
               ) : selectedId && models ? (
                 <><b>No model named {selectedId}</b><span style={{ fontSize: 12 }}>Pick one from the library</span></>
               ) : (
@@ -129,6 +121,10 @@ export function App() {
       </main>
 
       <div className="inspector-slot" ref={setInspectorSlot} />
+      {creating && (
+        <CreatePanel live={live} close={() => go("/models")} toast={toast}
+          created={(id) => { setTab("claude"); openModel(id); }} />
+      )}
 
       <aside className="panel side-panel left-panel" aria-label="Print Bay">
         <div className="panel-head drag">
@@ -147,13 +143,11 @@ export function App() {
               onClick={() => go(selectedId ? `/models/${encodeURIComponent(selectedId)}` : "/models")}>Models</button>
           </div>
         </div>
-        <div className="panel-body" style={route.left === "create" ? { display: "flex", flexDirection: "column", overflow: "hidden" } : undefined}>
+        <div className="panel-body">
           {!models ? (
             <div className="sec muted">Loading…</div>
           ) : route.left === "printer" ? (
             <PrinterPanel live={live} models={models} toast={toast} openModel={openModel} />
-          ) : route.left === "create" ? (
-            <CreatePanel live={live} models={models} back={() => go("/models")} openModel={openModel} onModel={setCreated} toast={toast} />
           ) : (
             <ModelsPanel ref={search} models={models} selected={selectedId} open={openModel} create={() => go("/create")} />
           )}
