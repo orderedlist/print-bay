@@ -178,10 +178,12 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   useEffect(() => { if (perPlate > fit) setPerPlate(fit); }, [fit]); // eslint-disable-line react-hooks/exhaustive-deps
   const plate = perPlate > 1 ? job?.plates.find((p) => p.perPlate === perPlate) : undefined;
   const exact = perPlate === 1 ? job?.stats : plate && !plate.stale ? plate.stats : null;
-  // until a full plate is sliced, scale one copy (an overestimate: copies share travel and colour swaps)
-  const stats = exact ?? (job?.stats && perPlate > 1
-    ? { ...job.stats, seconds: job.stats.seconds * perPlate, grams: job.stats.grams * perPlate, cost: { ...job.stats.cost, total: job.stats.cost.total * perPlate } }
-    : null);
+  // until this plate is sliced, draw a line through the nearest counts that are: plates share
+  // travel and colour swaps, so one copy times n would overestimate badly
+  const stats = exact ?? (job?.stats && perPlate > 1 ? interpolate(perPlate, [
+    { n: 1, stats: job.stats },
+    ...job.plates.filter((p) => p.stats && !p.stale).map((p) => ({ n: p.perPlate, stats: p.stats! })),
+  ]) : null);
   const estimated = !!stats && !exact;
   // slice the plate as soon as the count settles, so the real time replaces the estimate
   const failed = log.at(-1)?.state === "failed";
@@ -382,8 +384,7 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
                 <div className="tile"><div className="k">Filament</div><div className="v mono">{stats ? `${Math.round(stats.grams * copies)} g` : "—"}</div></div>
                 <div className="tile"><div className="k">Cost</div><div className="v mono">{stats ? money(stats.cost.total * copies) : "—"}</div></div>
               </div>
-              {estimated && !slicing && !failed && <div className="muted" style={{ marginTop: 10 }}>Estimated from one copy until the plate is sliced; a full plate shares
-                travel and colour swaps, so it comes out quicker.</div>}
+              {estimated && !slicing && !failed && <div className="muted" style={{ marginTop: 10 }}>Estimated from the plates sliced so far, until this one is.</div>}
               {failed && !slicing && <div style={{ marginTop: 10, color: "var(--bad)" }}>Slicing failed.{" "}
                 <button className="link-btn" onClick={slice}>Try again</button>
                 <div className="log">{log.slice(-5).map((l) => l.line).join("\n")}</div></div>}
@@ -466,6 +467,19 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
       )}
     </>
   );
+}
+
+type Stats = NonNullable<Model["jobs"][number]["stats"]>;
+
+/** Time, filament and cost for n copies on a plate, from the slices nearest n (a straight line through two). */
+function interpolate(n: number, known: { n: number; stats: Stats }[]): Stats {
+  const sorted = [...known].sort((a, b) => Math.abs(a.n - n) - Math.abs(b.n - n) || a.n - b.n);
+  const [p, q] = sorted;
+  const at = (f: (s: Stats) => number) => {
+    if (!q || p.n === q.n) return (f(p.stats) / p.n) * n; // one point: scale it
+    return f(p.stats) + ((f(q.stats) - f(p.stats)) / (q.n - p.n)) * (n - p.n);
+  };
+  return { ...p.stats, seconds: Math.max(0, at((s) => s.seconds)), grams: Math.max(0, at((s) => s.grams)), cost: { ...p.stats.cost, total: Math.max(0, at((s) => s.cost.total)) } };
 }
 
 function nearest(hex: string | null, slots: { slot: string; color: string }[]) {
