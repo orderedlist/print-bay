@@ -45,14 +45,16 @@ const Chevron = () => (
 );
 
 /** A collapsible inspector section. */
-function Section({ icon, label, open, toggle, children, extra }: {
-  icon?: ReactNode; label: string; open?: boolean; toggle?: () => void; children: ReactNode; extra?: ReactNode;
+/** A collapsible inspector section. `action` sits at the right of the header, outside its toggle. */
+function Section({ icon, label, open, toggle, children, extra, action }: {
+  icon?: ReactNode; label: string; open?: boolean; toggle?: () => void; children: ReactNode; extra?: ReactNode; action?: ReactNode;
 }) {
+  const head = toggle
+    ? <button className="sech" aria-expanded={open} onClick={toggle}>{icon}{label}{extra}<Chevron /></button>
+    : <div className="sech">{icon}{label}{extra}</div>;
   return (
     <div className="sec">
-      {toggle
-        ? <button className="sech" aria-expanded={open} onClick={toggle}>{icon}{label}{extra}<Chevron /></button>
-        : <div className="sech">{icon}{label}{extra}</div>}
+      {action ? <div style={{ display: "flex", alignItems: "center", gap: 10 }}>{head}{action}</div> : head}
       {(open ?? true) && <div className="sec-body">{children}</div>}
     </div>
   );
@@ -86,6 +88,7 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   const [size, setSize] = useState<THREE.Vector3 | null>(null);
   const [open, setOpen] = useState({ dims: true, checks: true, params: true, notes: false });
   const flip = (k: keyof typeof open) => setOpen((o) => ({ ...o, [k]: !o[k] }));
+  const [units, setUnits] = useUnits();
 
   // ---- printability checks, on the model as it will be sliced ----
   const [checks, setChecks] = useState<CheckReport | null>(null);
@@ -286,11 +289,16 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
         {tab === "print" && (
           <div className="panel-body">
             <Section label="Dimensions" open={open.dims} toggle={() => flip("dims")}
+              action={<div className="seg seg-sm" role="radiogroup" aria-label="Units" style={{ padding: 2, flex: "none" }}>
+                {(["mm", "in"] as const).map((u) => (
+                  <button key={u} role="radio" aria-checked={units === u} onClick={() => setUnits(u)} style={{ height: 22, padding: "0 8px", fontSize: 11.5 }}>{u}</button>
+                ))}
+              </div>}
               icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M4 8 12 4l8 4v8l-8 4-8-4z" /></svg>}>
               <div className="grid3">
                 {(["x", "y", "z"] as const).map((k) => (
-                  <div key={k} className="box mono" title={size ? inches(size[k]) : undefined}>
-                    <span>{k.toUpperCase()}</span><span>{size ? size[k].toFixed(1) : "…"}</span>
+                  <div key={k} className="box mono" title={size ? (units === "in" ? `${size[k].toFixed(1)} mm` : inches(size[k])) : undefined}>
+                    <span>{k.toUpperCase()}</span><span>{size ? (units === "in" ? `${(size[k] / 25.4).toFixed(2)}″` : size[k].toFixed(1)) : "…"}</span>
                   </div>
                 ))}
               </div>
@@ -481,6 +489,14 @@ function interpolate(n: number, known: { n: number; stats: Stats }[]): Stats {
     return f(p.stats) + ((f(q.stats) - f(p.stats)) / (q.n - p.n)) * (n - p.n);
   };
   return { ...p.stats, seconds: Math.max(0, at((s) => s.seconds)), grams: Math.max(0, at((s) => s.grams)), cost: { ...p.stats.cost, total: Math.max(0, at((s) => s.cost.total)) } };
+}
+
+/** mm or inches for the dimensions, remembered on this device. */
+function useUnits(): ["mm" | "in", (u: "mm" | "in") => void] {
+  const [units, set] = useState<"mm" | "in">(() => {
+    try { return localStorage.getItem("printbay.units") === "in" ? "in" : "mm"; } catch { return "mm"; }
+  });
+  return [units, (u) => { set(u); try { localStorage.setItem("printbay.units", u); } catch { /* not remembered */ } }];
 }
 
 function nearest(hex: string | null, slots: { slot: string; color: string }[]) {
