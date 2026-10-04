@@ -43,6 +43,11 @@ function sessionDir(id: string) {
   return path.join(DIR, id);
 }
 
+/** Where a chat's throwaway files go (test renders, previews): the CLI denies anything outside its directories. */
+function scratchDir(id: string) {
+  return path.join(sessionDir(id), "scratch");
+}
+
 function save(s: AgentSession) {
   fs.writeFileSync(path.join(DIR, `${s.id}.json`), JSON.stringify({ ...s, running: false }, null, 2));
 }
@@ -228,7 +233,10 @@ OpenSCAD conventions (the app depends on these):
 - Design to print without supports where possible (45 degree rule, short bridges), within the 260 x 260 mm bed.
   Thin plate-like walls in 1.8 mm (two perimeters a side); keep solid members compact (the slicer prints them as shells).
 - End with an echo of the overall size, e.g. echo(str("Size ", W, " x ", D, " x ", H, " mm")).
-- After every change, render to check it: ${OPENSCAD} -o /tmp/print-bay-check.stl <file>  (read the ECHO and any WARNING/ERROR).
+- Throwaway files (test renders, PNG previews, experiments) go in ${scratchDir(s.id)}/, never /tmp or anywhere else:
+  only that folder and the model's own files are writable. Write files with the Write tool, not shell redirects.
+- After every change, render to check it: ${OPENSCAD} -o ${scratchDir(s.id)}/check.stl <file>  (read the ECHO and any WARNING/ERROR).
+  To look at it, render a PNG there (--imgsize=800,800 --camera=... --projection=o) and Read it.
 - Then run the printability checks on the model as it will be sliced: node app/server/dist/check-cli.js <model-folder-name>
   (overhangs, thin walls, separate pieces, bed contact, warping, tipping, build volume). Fix FAILs; fix or explain WARNs.
 
@@ -275,9 +283,10 @@ Render to verify, then tell the user it's ready and what they can tweak.`;
 function allowedTools(s: AgentSession): string[] {
   const read = ["Read", "Glob", "Grep", `Bash(${OPENSCAD}:*)`, "Bash(openscad:*)",
     "Bash(node app/server/dist/check-cli.js:*)", `Bash(node ${ROOT}/app/server/dist/check-cli.js:*)`];
+  read.push(`Edit(/${scratchDir(s.id)}/**)`); // Edit rules cover Write too
   const m = `models/${s.modelId}`;
-  if (s.kind === "edit") return [...read, `Edit(${m}/**)`, `Write(${m}/**)`, ...(s.job ? [`Edit(jobs/${s.job}.toml)`] : [])];
-  return [...read, `Edit(${m}/**)`, `Write(${m}/**)`, `Write(jobs/${s.modelId}.toml)`, `Edit(jobs/${s.modelId}.toml)`];
+  if (s.kind === "edit") return [...read, `Edit(${m}/**)`, ...(s.job ? [`Edit(jobs/${s.job}.toml)`] : [])];
+  return [...read, `Edit(${m}/**)`, `Edit(jobs/${s.modelId}.toml)`];
 }
 
 function toolLabel(name: string, input: any): string {
@@ -359,9 +368,10 @@ SVG units: OpenSCAD reads 1 px as 1 mm unless the file sets a width/height in mm
 
 /** One `claude -p` turn, streaming into the transcript. */
 function run(s: AgentSession, prompt: string) {
+  fs.mkdirSync(scratchDir(s.id), { recursive: true });
   const args = [
     "-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-    "--permission-mode", "dontAsk", "--allowedTools", ...allowedTools(s),
+    "--permission-mode", "dontAsk", "--add-dir", scratchDir(s.id), "--allowedTools", ...allowedTools(s),
     "--append-system-prompt", brief(s),
   ];
   if (s.claudeSessionId) args.push("--resume", s.claudeSessionId);
