@@ -56,7 +56,7 @@ export function ModelViewer({ model, mode, setMode, theme, shift, onSize, onAvai
   useEffect(() => {
     if (!stage) return;
     let alive = true;
-    setLoading(model.kind === "scad" ? "Rendering with OpenSCAD…" : "Loading…");
+    setLoading(model.kind === "scad" ? "Rendering with OpenSCAD…" : model.kind === "py" ? "Building with nurb…" : "Loading…");
     api<ArrayBuffer>(`/api/models/${model.id}/mesh`)
       .then((buf) => {
         if (!alive) return;

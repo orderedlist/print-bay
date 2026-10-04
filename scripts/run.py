@@ -42,6 +42,9 @@ import parts3mf  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 ORCA = os.environ.get("ORCA", "/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer")
 OPENSCAD = os.environ.get("OPENSCAD", "openscad")
+# nurb parts (.py) build in nurb's own environment, which the nurb app installs
+NURB_PYTHON = os.environ.get(
+    "NURB_PYTHON", str(Path.home() / "Library/Application Support/dev.nurb.desktop/env/bin/python"))
 DONE_STATES = {"complete", "cancelled", "error"}
 COLORS = {
     "black": "#000000", "white": "#FFFFFF", "grey": "#808080", "gray": "#808080",
@@ -72,8 +75,8 @@ def slice_job(job, per_plate=1):
         if not f.exists():
             sys.exit(f"Missing file: {f.relative_to(ROOT)}")
 
-    if per_plate > 1 and model.suffix != ".scad":
-        sys.exit("Filling the plate works for OpenSCAD models; this one is a ready-made file.")
+    if per_plate > 1 and model.suffix not in (".scad", ".py"):
+        sys.exit("Filling the plate works for OpenSCAD and nurb models; this one is a ready-made file.")
     out = ROOT / "gcode" / gcode_name(job, per_plate)
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
@@ -87,8 +90,9 @@ def slice_job(job, per_plate=1):
                     for i, name in enumerate(parts, 1)]
         model = parts3mf.write(rendered, out / "model.3mf", job["name"], copies=per_plate)
         process, filaments = multi_filament(process, p["filament"], list(parts.values()), out)
-    elif model.suffix == ".scad":
-        stl = render_scad(model, out / "model.stl", job.get("scad", {}))
+    elif model.suffix in (".scad", ".py"):
+        stl = (render_scad(model, out / "model.stl", job.get("scad", {})) if model.suffix == ".scad"
+               else render_nurb(model, out / "model.stl", job.get("params", {})))
         model = parts3mf.write([(job["name"], stl, 1)], out / "model.3mf", job["name"], copies=per_plate)
     elif model.suffix == ".3mf":
         model = single_filament(model, out / "model.3mf")
@@ -96,7 +100,7 @@ def slice_job(job, per_plate=1):
     # OpenSCAD models arrive centred and laid out as the .scad intends (see parts3mf); Orca's
     # auto-arrange would spin them (a 45-degree turn of a two-colour inlay, say), so it's off
     # for those. Downloaded 3MFs keep Orca's placement.
-    placed = job["model"].endswith(".scad")
+    placed = job["model"].endswith((".scad", ".py"))
     cmd = [
         ORCA,
         "--load-settings", f"{p['machine']};{process}",
@@ -128,6 +132,18 @@ def render_scad(src, dest, params=None):
     if res.returncode != 0 or not dest.exists():
         print(res.stderr[-2000:])
         sys.exit("OpenSCAD render failed (output above).")
+    return dest
+
+
+def render_nurb(src, dest, params=None):
+    """Build a nurb part (laid out to print, its default) with the job's [params] as keyword arguments."""
+    print(f"Building {src.relative_to(ROOT)} with nurb")
+    sets = [f"{k}={v}" for k, v in (params or {}).items()]
+    res = subprocess.run([NURB_PYTHON, str(ROOT / "scripts/nurb_part.py"), str(src), str(dest), *sets],
+                         capture_output=True, text=True, cwd=ROOT)
+    if res.returncode != 0 or not dest.exists():
+        print(res.stdout[-2000:], res.stderr[-2000:], sep="\n")
+        sys.exit("nurb build failed (output above).")
     return dest
 
 

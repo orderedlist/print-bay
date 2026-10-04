@@ -1,0 +1,15 @@
+#!/bin/zsh
+# nurb, run inside a model folder that is a nurb project (it has parts/):
+#   scripts/nurb models/mini-tote-rack check redesign
+#   scripts/nurb models/mini-tote-rack stl redesign out.stl rows=2   # build with overrides (scripts/nurb_part.py)
+# A plain path, so Claude's permission rules can name it (nurb lives under "Application Support").
+set -e
+root=${0:A:h:h}
+env=${NURB_ENV:-$HOME/Library/Application Support/dev.nurb.desktop/env/bin}
+dir=$1; shift
+cd "$root/$dir"
+if [[ $1 == stl ]]; then
+  part=$2; out=${3:A}; shift 3
+  exec "$env/python" "$root/scripts/nurb_part.py" "parts/$part.py" "$out" "$@"
+fi
+exec "$env/nurb" "$@"

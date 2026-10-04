@@ -87,7 +87,7 @@ export function latestFor(modelId: string): AgentSession | null {
 }
 
 function jobFor(modelId: string) {
-  return listJobs().find((j) => path.dirname(j.model) === `models/${modelId}`)?.name ?? null;
+  return listJobs().find((j) => j.model.startsWith(`models/${modelId}/`))?.name ?? null;
 }
 
 export function createSession(kind: "edit" | "new", modelId?: string): AgentSession {
@@ -265,6 +265,32 @@ Design rules for parts that print and hold up (FDM, PLA):
 - In SOURCE.md keep short design notes, including what was tried and rejected (and why), so the next edit doesn't undo it.
 You cannot slice, print, run git, or touch other files; the app slices when the user asks. Don't suggest commands for the user to run.`;
 
+  // a nurb part (Python/build123d, models/<id>/parts/<part>.py) instead of OpenSCAD
+  const nurbParts = s.modelId && fs.existsSync(path.join(ROOT, "models", s.modelId, "parts"))
+    ? fs.readdirSync(path.join(ROOT, "models", s.modelId, "parts")).filter((f) => f.endsWith(".py")) : [];
+  if (nurbParts.length) {
+    const m = `models/${s.modelId}`;
+    const part = nurbParts[0].slice(0, -3);
+    return `${common}
+
+THIS MODEL IS NOT OPENSCAD, so the OpenSCAD conventions above don't apply; the design rules do.
+It is a nurb part: ${m}/parts/${part}.py, a Python function (build123d via \`from nurb import *\`) whose keyword defaults are
+its parameters, each with a \`name: what it moves\` line in the docstring (the app shows those as the editable form). It takes
+\`upright\` (False lays it out to print, True stands it as used) the same way the OpenSCAD models do. ${m}/parts/${part}.md is its
+card: keep the design notes there current, never hand-edit the AUTO block. ${m}/measurements.toml records where each fitted
+dimension came from.${s.job ? ` Its job file is jobs/${s.job}.toml (parameter overrides go in its [params] table).` : ""}
+Change only files in ${m}/${s.job ? ` and jobs/${s.job}.toml` : ""}.
+Tools, always through the wrapper (run from the repo root, one command per call):
+- scripts/nurb ${m} rules                    the design doctrine; read it before a non-trivial change
+- scripts/nurb ${m} api                      what \`from nurb import *\` provides, with signatures
+- scripts/nurb ${m} check ${part}            the printability rules; fix what fails
+- scripts/nurb ${m} inspect ${part}          measure the built part: faces, normals, which sit on the bed
+- scripts/nurb ${m} stl ${part} ${scratchDir(s.id)}/check.stl [name=value ...]   build it, with overrides
+nurb's printer line may name another printer; this one is the K2 (260 x 260 mm bed), so design to that.
+Make the change the user asks for, keep the parameters editable, check it, then summarize what changed in a sentence or two
+(mention new or changed parameters by name).`;
+  }
+
   const drawn = s.modelId && fs.readdirSync(path.join(ROOT, "models", s.modelId)).some((f) => f.endsWith(".scad"));
   if (s.kind === "edit" || drawn) {
     return `${common}
@@ -288,7 +314,8 @@ Render to verify, then tell the user it's ready and what they can tweak.`;
 
 function allowedTools(s: AgentSession): string[] {
   const read = ["Read", "Glob", "Grep", `Bash(${OPENSCAD}:*)`, "Bash(openscad:*)",
-    "Bash(node app/server/dist/check-cli.js:*)", `Bash(node ${ROOT}/app/server/dist/check-cli.js:*)`];
+    "Bash(node app/server/dist/check-cli.js:*)", `Bash(node ${ROOT}/app/server/dist/check-cli.js:*)`,
+    "Bash(scripts/nurb:*)", `Bash(${ROOT}/scripts/nurb:*)`]; // nurb parts (see scripts/nurb)
   read.push(`Edit(/${scratchDir(s.id)}/**)`); // Edit rules cover Write too
   const m = `models/${s.modelId}`;
   if (s.kind === "edit") return [...read, `Edit(${m}/**)`, ...(s.job ? [`Edit(jobs/${s.job}.toml)`] : [])];

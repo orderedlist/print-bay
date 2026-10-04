@@ -2,14 +2,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parse } from "smol-toml";
-import { ROOT } from "./config.js";
+import { execFileSync } from "node:child_process";
+import { NURB_PYTHON, ROOT } from "./config.js";
 
 export const COLORS: Record<string, string> = {
   black: "#000000", white: "#FFFFFF", grey: "#808080", gray: "#808080",
   red: "#C12E1F", orange: "#FF6A13", yellow: "#F4D53F", green: "#00AE42",
   blue: "#0A2989", purple: "#5E43B7", pink: "#E4BDD0", brown: "#7C4B00",
 };
-const MESH_TYPES = [".scad", ".3mf", ".stl"];
+const MESH_TYPES = [".scad", ".3mf", ".stl"]; // plus nurb parts (.py), named by their job
 
 export interface Job {
   name: string;
@@ -64,7 +65,8 @@ export function listJobs(): Job[] {
       color: data.color,
       copies: data.copies ?? 1,
       profiles: data.profiles ?? {},
-      scad: Object.fromEntries(Object.entries(data.scad ?? {}).map(([k, v]) => [k, String(v)])),
+      // parameter overrides: [scad] for OpenSCAD (-D), [params] for nurb parts (keyword arguments)
+      scad: Object.fromEntries(Object.entries((String(data.model).endsWith(".py") ? data.params : data.scad) ?? {}).map(([k, v]) => [k, String(v)])),
       parts: Object.entries(data.parts ?? {}).map(([name, color]) => ({ name, color: String(color) })),
     };
   });
@@ -132,7 +134,7 @@ export function listModels(): Model[] {
         const hit = files.find((f) => f.endsWith(ext));
         if (hit) { mesh = `models/${id}/${hit}`; break; }
       }
-      const modelJobs = jobs.filter((j) => path.dirname(j.model) === `models/${id}`);
+      const modelJobs = jobs.filter((j) => j.model.startsWith(`models/${id}/`)); // the model file may sit deeper (a nurb part in parts/)
       if (modelJobs[0]) mesh = modelJobs[0].model;
       const sourceFile = path.join(dir, id, "SOURCE.md");
       return {
@@ -174,7 +176,25 @@ export interface ScadParam { name: string; default: string; value: string; comme
 const ASSIGN = /^([A-Za-z_]\w*)\s*=\s*([^;]+);\s*(?:\/\/\s*(.*))?$/;
 const SIMPLE = /^[\d.\s+\-*/()]*(\bin\b[\d.\s+\-*/()]*)*$/;
 
+// nurb parts: the part function's keyword defaults, read by scripts/nurb_part.py (cached by file time)
+const NUMBERISH = /^(-?(\d+\.?\d*|\.\d+)|True|False)$/;
+const HIDDEN = new Set(["upright", "draft"]); // nurb conventions the app sets itself
+const nurbCache = new Map<string, { mtime: number; params: { name: string; default: string; comment: string }[] }>();
+function nurbParams(job: Job): ScadParam[] {
+  const file = abs(job.model);
+  const time = mtime(file);
+  let hit = nurbCache.get(file);
+  if (!hit || hit.mtime !== time) {
+    const out = execFileSync(NURB_PYTHON, [abs("scripts/nurb_part.py"), file, "--params"], { cwd: ROOT, encoding: "utf8", timeout: 60_000 });
+    hit = { mtime: time, params: JSON.parse(out) };
+    nurbCache.set(file, hit);
+  }
+  return hit.params.filter((p) => !HIDDEN.has(p.name) && NUMBERISH.test(p.default))
+    .map((p) => ({ ...p, value: job.scad[p.name] ?? p.default }));
+}
+
 export function scadParams(job: Job): ScadParam[] {
+  if (job.model.endsWith(".py")) return nurbParams(job);
   if (!job.model.endsWith(".scad")) return [];
   const src = fs.readFileSync(abs(job.model), "utf8");
   const params: ScadParam[] = [];
@@ -191,19 +211,23 @@ export function scadParams(job: Job): ScadParam[] {
 
 /** Rewrite only the job's [scad] table; values equal to the file's defaults are dropped. */
 export function setScadParams(job: Job, values: Record<string, string>): void {
+  const nurb = job.model.endsWith(".py");
+  const table = nurb ? "params" : "scad";
   const known = new Map(scadParams(job).map((p) => [p.name, p]));
   const overrides = Object.entries(values).filter(([k, v]) => {
     const p = known.get(k);
     if (!p) throw Object.assign(new Error(`Unknown parameter ${k}`), { statusCode: 400 });
-    if (!SIMPLE.test(v.trim()) || !/\d/.test(v)) throw Object.assign(new Error(`${k}: use a number (or a number * in)`), { statusCode: 400 });
+    if (nurb ? !NUMBERISH.test(v.trim()) : !SIMPLE.test(v.trim()) || !/\d/.test(v))
+      throw Object.assign(new Error(nurb ? `${k}: use a number` : `${k}: use a number (or a number * in)`), { statusCode: 400 });
     return v.trim() !== p.default;
   });
   const file = abs(job.file);
   const text = fs.readFileSync(file, "utf8");
-  // drop the existing [scad] section (up to the next table header or EOF)
-  let next = text.replace(/\n*^\[scad\][^\n]*\n(?:(?!\[)[^\n]*\n?)*/m, "\n").replace(/\n+$/, "\n");
+  // drop the existing [scad] or [params] section (up to the next table header or EOF)
+  let next = text.replace(new RegExp(`\\n*^\\[${table}\\][^\\n]*\\n(?:(?!\\[)[^\\n]*\\n?)*`, "m"), "\n").replace(/\n+$/, "\n");
   if (overrides.length) {
-    next += "\n[scad]                 # OpenSCAD overrides, passed as -D (edited by the app)\n";
+    next += nurb ? "\n[params]               # nurb part overrides, passed as keyword arguments (edited by the app)\n"
+      : "\n[scad]                 # OpenSCAD overrides, passed as -D (edited by the app)\n";
     next += overrides.map(([k, v]) => `${k} = ${JSON.stringify(v.trim())}`).join("\n") + "\n";
   }
   fs.writeFileSync(file, next);

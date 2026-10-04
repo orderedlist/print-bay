@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type * as THREE from "three";
-import { api, colorName, duration, inches, money, title, useAgentSession, type Live } from "../api";
+import { api, colorName, duration, inches, kindLabel, money, title, useAgentSession, type Live } from "../api";
 import { AgentPanel } from "../components/AgentPanel";
 import { ModelViewer, SEVERITY_COLORS, type ViewAvailability, type ViewMode } from "../components/ModelViewer";
 import { Params } from "../components/Params";
@@ -78,7 +78,8 @@ interface Props {
 export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, shift, inspectorSlot, close, goPrinter, newModel, toast }: Props) {
   const job = model.jobs[0];
   const drawn = !!model.file; // a model Claude is still creating has only its folder
-  const canEdit = model.kind === "scad" || !drawn;
+  const parametric = model.kind === "scad" || model.kind === "py"; // OpenSCAD, or a nurb part
+  const canEdit = parametric || !drawn;
   const status = live.status;
   const [mode, setMode] = useState<ViewMode>("model");
   const [available, setAvailable] = useState<ViewAvailability>({ model: true, paths: false, stress: false, layout: false });
@@ -174,7 +175,7 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   const colorsText = chosenAll.map((c) => (c ? colorName(c.color).toLowerCase() : "?")).join(" and ");
   const idle = status ? IDLE_STATES.has(status.state) : false;
   // how many fit on one plate (OpenSCAD models: the slicer lays them out), from the size as printed
-  const fit = model.kind === "scad" && checks ? plateFit(checks.size[0], checks.size[1], multi) : 1;
+  const fit = parametric && checks ? plateFit(checks.size[0], checks.size[1], multi) : 1;
   useEffect(() => { if (perPlate > fit) setPerPlate(fit); }, [fit]); // eslint-disable-line react-hooks/exhaustive-deps
   const plate = perPlate > 1 ? job?.plates.find((p) => p.perPlate === perPlate) : undefined;
   const exact = perPlate === 1 ? job?.stats : plate && !plate.stale ? plate.stats : null;
@@ -277,7 +278,7 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
         <div className="sec">
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
             <h1 style={{ fontSize: 16 }}>{title(model.id)}</h1>
-            <span className="faint" style={{ fontSize: 12 }}>{model.kind?.toUpperCase()}</span>
+            <span className="faint" style={{ fontSize: 12 }}>{kindLabel(model.kind)}</span>
             {job?.stale && job.stats && <span style={{ fontSize: 12, color: "var(--warn)" }}>changed since slice</span>}
           </div>
         </div>
@@ -420,7 +421,7 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
         {tab === "claude" && (
           <div className="panel-body" style={{ display: "flex", flexDirection: "column" }}>
             {!canEdit ? (
-              <div className="sec muted">Claude can only edit OpenSCAD models. This one is a downloaded {model.kind?.toUpperCase()} mesh,
+              <div className="sec muted">Claude can only edit OpenSCAD and nurb models. This one is a downloaded {model.kind?.toUpperCase()} mesh,
                 so its shape is fixed; <button className="link-btn" style={{ padding: 0 }} onClick={newModel}>start a new model</button> to have Claude design a version you can change.</div>
             ) : session ? (
               <AgentPanel session={session} toast={toast} allowUploads starters={drawn ? EDIT_STARTERS : undefined} onNewChat={() => openAgent(true)}

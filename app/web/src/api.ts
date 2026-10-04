@@ -56,6 +56,9 @@ export function useModels(version: number): Model[] | null {
 
 // ---- formatting ----
 
+/** How a model's source shows in lists: SCAD, NURB (a nurb part, .py), 3MF, STL. */
+export const kindLabel = (kind: string | null) => (kind === "py" ? "NURB" : kind?.toUpperCase() ?? null);
+
 export const money = (n: number) => `$${n.toFixed(2)}`;
 export const mm = (n: number) => `${n.toFixed(1)} mm`;
 export const inches = (n: number) => `${(n / 25.4).toFixed(2)}″`;

@@ -32,5 +32,9 @@ export const CLAUDE = process.env.CLAUDE ?? firstExisting(
   "claude",
 );
 export const PYTHON = process.env.PYTHON ?? firstExisting(path.join(ROOT, ".venv/bin/python"), "python3");
+// nurb parts (Python/build123d) build with nurb's own environment, which the nurb app installs
+const NURB_ENV = path.join(process.env.HOME ?? "", "Library/Application Support/dev.nurb.desktop/env/bin");
+export const NURB_PYTHON = process.env.NURB_PYTHON ?? firstExisting(path.join(NURB_ENV, "python"), "python3");
+export const NURB = process.env.NURB ?? firstExisting(path.join(NURB_ENV, "nurb"), "nurb");
 
 fs.mkdirSync(CACHE, { recursive: true });

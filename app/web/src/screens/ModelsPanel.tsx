@@ -1,5 +1,5 @@
 import { forwardRef, useState } from "react";
-import { title } from "../api";
+import { kindLabel, title } from "../api";
 import { Thumb } from "../components/Thumb";
 import { ICONS } from "../components/Toolbar";
 import type { Model } from "../types";
@@ -50,7 +50,7 @@ export const ModelsPanel = forwardRef<HTMLInputElement, Props>(function ModelsPa
                   <span className="thumb"><Thumb model={m} /></span>
                   <span className="row-text">
                     <span className="row-title">{title(m.id)}</span>
-                    <span className="row-sub">{m.kind?.toUpperCase() ?? "NEW"} · {job?.stats ? job.stats.time.replace(/ \d+s$/, "") : why}</span>
+                    <span className="row-sub">{kindLabel(m.kind) ?? "NEW"} · {job?.stats ? job.stats.time.replace(/ \d+s$/, "") : why}</span>
                   </span>
                   <span className="dot" style={{ background: dot }} title={why} />
                 </button>
