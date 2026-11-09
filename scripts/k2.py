@@ -15,7 +15,7 @@ Usage:
   python k2.py pause | resume | cancel
 
 Requires: pip install requests
-Override host with K2_HOST env var, e.g. K2_HOST=192.168.4.81:7125
+Override host with K2_HOST env var, e.g. K2_HOST=192.168.4.42:7125
 """
 import os
 import sys
@@ -25,7 +25,7 @@ from pathlib import Path
 
 import requests
 
-HOST = os.environ.get("K2_HOST", "192.168.4.81:7125")
+HOST = os.environ.get("K2_HOST", "192.168.4.42:7125")
 BASE = f"http://{HOST}"
 TIMEOUT = 10
 

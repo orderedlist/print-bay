@@ -1,7 +1,7 @@
 # 3d-prints
 
 Models, slicer profiles, and scripts for printing on the Creality K2 Combo
-(Moonraker at `192.168.4.81:7125`).
+(Moonraker at `192.168.4.42:7125`).
 
 ```
 models/<name>/      downloaded .3mf/.stl + SOURCE.md (link, license)

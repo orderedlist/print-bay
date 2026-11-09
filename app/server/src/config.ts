@@ -9,7 +9,7 @@ export const ROOT = process.env.PRINT_BAY_ROOT ?? path.resolve(here, "../../..")
 export const CACHE = process.env.PRINT_BAY_CACHE ?? path.join(ROOT, ".cache", "app");
 export const WEB_DIST = path.resolve(here, "../../web/dist");
 
-export const K2_HOST = process.env.K2_HOST ?? "192.168.4.81:7125";
+export const K2_HOST = process.env.K2_HOST ?? "192.168.4.42:7125";
 export const MOONRAKER = `http://${K2_HOST}`;
 export const CAMERA_URL = `http://${K2_HOST.split(":")[0]}:8000/call/webrtc_local`;
 
