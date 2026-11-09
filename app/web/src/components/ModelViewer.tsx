@@ -4,7 +4,7 @@ import { api } from "../api";
 import { FEATURE_COLORS, Stage, parseMesh, type Toolpaths } from "../stage";
 import type { Theme } from "../theme";
 import { StressPanel } from "./StressPanel";
-import type { CheckReport, Model } from "../types";
+import type { CheckReport, Model, ModelJob } from "../types";
 
 export const SEVERITY_COLORS = { fail: "#e5484d", warn: "#f2a33a", info: "#3d8bfd" } as const;
 
@@ -13,6 +13,8 @@ export interface ViewAvailability { model: boolean; paths: boolean; stress: bool
 
 interface Props {
   model: Model;
+  /** The job (part) to show, for a model with several; its first otherwise. */
+  job?: ModelJob;
   mode: ViewMode;
   /** Falls back to the model view when the current one goes away (e.g. no toolpaths). */
   setMode: (mode: ViewMode) => void;
@@ -28,7 +30,7 @@ interface Props {
 }
 
 /** The model on the full-window stage, plus the floating controls for the current view. */
-export function ModelViewer({ model, mode, setMode, theme, shift, onSize, onAvailable, onStatus, checks, colors }: Props) {
+export function ModelViewer({ model, job: shown, mode, setMode, theme, shift, onSize, onAvailable, onStatus, checks, colors }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [stage, setStage] = useState<Stage | null>(null);
   const [layoutReady, setLayoutReady] = useState(false);
@@ -40,7 +42,10 @@ export function ModelViewer({ model, mode, setMode, theme, shift, onSize, onAvai
   const [loading, setLoading] = useState<string | null>("Loading…");
   const [paths, setPaths] = useState<Toolpaths | null>(null);
   const [, redraw] = useState(0);
-  const job = model.jobs.find((j) => j.stats);
+  // a picked part shows its own toolpaths (or none until it's sliced); otherwise the first sliced job's
+  const job = shown && model.jobs.length > 1 ? (shown.stats ? shown : undefined) : model.jobs.find((j) => j.stats);
+  const meshJob = shown ?? model.jobs[0];
+  const jobQuery = meshJob ? `?job=${encodeURIComponent(meshJob.name)}` : "";
   const pathsKey = job ? `${job.name}:${job.stats!.slicedAt}` : null;
 
   useEffect(() => {
@@ -57,11 +62,11 @@ export function ModelViewer({ model, mode, setMode, theme, shift, onSize, onAvai
     if (!stage) return;
     let alive = true;
     setLoading(model.kind === "scad" ? "Rendering with OpenSCAD…" : model.kind === "py" ? "Building with nurb…" : "Loading…");
-    api<ArrayBuffer>(`/api/models/${model.id}/mesh`)
+    api<ArrayBuffer>(`/api/models/${model.id}/mesh${jobQuery}`)
       .then((buf) => {
         if (!alive) return;
-        const { geometry, size } = parseMesh(buf, model.jobs[0]?.parts.map((p) => p.hex));
-        stage.setMesh(geometry, model.jobs[0]?.hex ?? null);
+        const { geometry, size } = parseMesh(buf, meshJob?.parts.map((p) => p.hex));
+        stage.setMesh(geometry, meshJob?.hex ?? null);
         setMeshVersion((v) => v + 1);
         if (modeRef.current === "model" || modeRef.current === "stress") stage.showMesh();
         onSize?.(size);
@@ -70,7 +75,7 @@ export function ModelViewer({ model, mode, setMode, theme, shift, onSize, onAvai
       .catch((e) => alive && setLoading(`Couldn't load the model: ${e.message}`));
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stage, model.meshKey]);
+  }, [stage, model.meshKey, meshJob?.name]);
 
   // toolpaths
   useEffect(() => {
@@ -89,17 +94,17 @@ export function ModelViewer({ model, mode, setMode, theme, shift, onSize, onAvai
     if (!stage) return;
     let alive = true;
     setLayoutReady(false);
-    api<ArrayBuffer>(`/api/models/${model.id}/print-mesh`)
+    api<ArrayBuffer>(`/api/models/${model.id}/print-mesh${jobQuery}`)
       .then((buf) => {
         if (!alive) return;
-        stage.setLayoutMesh(parseMesh(buf, model.jobs[0]?.parts.map((p) => p.hex)).geometry, model.jobs[0]?.hex ?? null);
+        stage.setLayoutMesh(parseMesh(buf, meshJob?.parts.map((p) => p.hex)).geometry, meshJob?.hex ?? null);
         setLayoutReady(true);
         setLayoutVersion((v) => v + 1);
       })
       .catch(() => {});
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stage, model.meshKey]);
+  }, [stage, model.meshKey, meshJob?.name]);
 
   // paint the picked filament colours, and again whenever a new mesh arrives
   useEffect(() => { if (stage && colors?.length) stage.recolor(colors); }, [stage, colorKey, meshVersion, layoutVersion]); // eslint-disable-line react-hooks/exhaustive-deps

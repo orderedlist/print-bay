@@ -58,15 +58,15 @@ export async function start(opts: StartOptions = {}) {
   app.get("/api/rates", async () => rates());
   app.get("/api/models", async () =>
     listModels().map((m) => ({ ...m, jobs: m.jobs.map((j) => ({ ...j, slicing: isSlicing(j.name) })) })));
-  app.get<{ Params: { id: string } }>("/api/models/:id/mesh", async (req, reply) => {
-    const file = await meshFor(req.params.id);
+  app.get<{ Params: { id: string }; Querystring: { job?: string } }>("/api/models/:id/mesh", async (req, reply) => {
+    const file = await meshFor(req.params.id, { job: req.query.job });
     return reply.type("model/stl").header("Cache-Control", "no-store").send(fs.createReadStream(file));
   });
-  app.get<{ Params: { id: string } }>("/api/models/:id/print-mesh", async (req, reply) => {
-    const file = await meshFor(req.params.id, { print: true });
+  app.get<{ Params: { id: string }; Querystring: { job?: string } }>("/api/models/:id/print-mesh", async (req, reply) => {
+    const file = await meshFor(req.params.id, { print: true, job: req.query.job });
     return reply.type("model/stl").header("Cache-Control", "no-store").send(fs.createReadStream(file));
   });
-  app.get<{ Params: { id: string } }>("/api/models/:id/checks", async (req) => checkModel(req.params.id));
+  app.get<{ Params: { id: string }; Querystring: { job?: string } }>("/api/models/:id/checks", async (req) => checkModel(req.params.id, req.query.job));
   app.get<{ Params: { job: string } }>("/api/jobs/:job/toolpaths", async (req, reply) => {
     const body = toolpathsFor(getJob(req.params.job).name);
     if (!body) return reply.status(404).send({ error: "Not sliced yet" });

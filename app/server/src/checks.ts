@@ -217,7 +217,7 @@ function touching(bodies: number[][], tris: Tri[]): number[][] {
  * body, the others are colour set into it. They print fused, so parts that touch
  * count as one piece, and a colour inlay is skin-deep, not a wall.
  */
-export function check(pos: Float32Array, opts: { supports?: boolean; part?: Uint16Array | null } = {}): CheckReport {
+export function check(pos: Float32Array, opts: { supports?: boolean; part?: Uint16Array | null; pieces?: number } = {}): CheckReport {
   const size = center(pos);
   const tris = triangles(pos);
   const adj = adjacency(pos);
@@ -227,7 +227,7 @@ export function check(pos: Float32Array, opts: { supports?: boolean; part?: Uint
 
   // solids: more than one body means something came apart
   const bodies = (part ? touching(components(adj), tris) : components(adj)).sort((a, b) => b.length - a.length);
-  if (bodies.length > 1) {
+  if (bodies.length > (opts.pieces ?? 1)) { // a downloaded 3MF may lay out several pieces on purpose
     const stray = bodies[bodies.length - 1];
     findings.push({ rule: "solids", severity: "fail", at: weighted(tris, stray),
       message: `The model is ${bodies.length} separate pieces; one has come loose from the rest.`,

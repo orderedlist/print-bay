@@ -78,7 +78,11 @@ interface Props {
 
 /** A selected model: on the stage, with the bottom toolbar and the inspector beside it. */
 export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, shift, inspectorSlot, close, goPrinter, newModel, toast }: Props) {
-  const job = model.jobs[0];
+  // a multi-part model (labelled jobs, say a plant and its pot) prints one part at a time
+  const [jobName, setJobName] = useState<string | null>(null);
+  useEffect(() => setJobName(null), [model.id]);
+  const job = model.jobs.find((j) => j.name === jobName) ?? model.jobs[0];
+  const partGroups = pickerGroups(model.jobs);
   const drawn = !!model.file; // a model Claude is still creating has only its folder
   const parametric = model.kind === "scad" || model.kind === "py"; // OpenSCAD, or a nurb part
   const canEdit = parametric || !drawn;
@@ -97,12 +101,12 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
     let alive = true;
     if (!drawn) { setChecks(null); setChecking(false); return; }
     setChecking(true);
-    api<CheckReport>(`/api/models/${model.id}/checks`)
+    api<CheckReport>(`/api/models/${model.id}/checks${job ? `?job=${encodeURIComponent(job.name)}` : ""}`)
       .then((r) => alive && setChecks(r))
       .catch(() => alive && setChecks(null))
       .finally(() => alive && setChecking(false));
     return () => { alive = false; };
-  }, [model.id, model.meshKey, live.modelsVersion, drawn]);
+  }, [model.id, model.meshKey, live.modelsVersion, drawn, job?.name]);
   const issues = checks ? checks.findings.filter((f) => f.severity !== "info").length : 0;
 
   // ---- Claude ----
@@ -167,6 +171,7 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   const [copies, setCopies] = useState(job?.copies ?? 1);
   const [confirm, setConfirm] = useState(false);
   const [sending, setSending] = useState(false);
+  useEffect(() => { setPicked({}); setCopies(job?.copies ?? 1); }, [job?.name]); // a different part: its own colour and count
   useEffect(() => { // default to the spool nearest the job's color, once the printer reports them
     const missing = colorways.filter((c) => !picked[c.key]);
     if (missing.length && slots.length)
@@ -207,7 +212,7 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
           ? { job: job.name, colors: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.color])), copies, perPlate, startNow }
           : { job: job.name, color: chosen.color, copies, perPlate, startNow },
       });
-      const what = `${title(model.id)} in ${colorsText}`;
+      const what = `${title(model.id)}${job.label ? ` (${job.label})` : ""} in ${colorsText}`;
       toast(r.started
         ? `Started ${what}.${r.queued ? ` ${r.queued} more ${r.queued === 1 ? "copy" : "copies"} queued.` : ""}`
         : `Queued ${r.queued} × ${what}.`);
@@ -237,7 +242,7 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   return (
     <>
       {drawn ? (
-        <ModelViewer model={model} mode={mode} setMode={setMode} theme={theme} shift={shift}
+        <ModelViewer model={model} job={job} mode={mode} setMode={setMode} theme={theme} shift={shift}
           onSize={setSize} onAvailable={setAvailable} checks={checks}
           colors={colorways.map((c, i) => chosenAll[i]?.color ?? c.hex ?? "").filter(Boolean)} />
       ) : (
@@ -284,6 +289,23 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
             <span className="faint" style={{ fontSize: 12 }}>{kindLabel(model.kind)}</span>
             {job?.stale && job.stats && <span style={{ fontSize: 12, color: "var(--warn)" }}>changed since slice</span>}
           </div>
+          {partGroups && (
+            <div className="parts" role="radiogroup" aria-label="Part to print">
+              {partGroups.map((g) => (
+                <div key={g.name} className="parts-row">
+                  <span className="faint">{g.name}</span>
+                  <div className="seg seg-sm">
+                    {g.jobs.map(({ job: j, short }) => (
+                      <button key={j.name} role="radio" aria-checked={j.name === job?.name} aria-label={j.label ?? j.name}
+                        title={j.stats ? `${j.label} · ${j.stats.time}` : `${j.label} · not sliced`} onClick={() => setJobName(j.name)}>
+                        {j.hex && <span className="swatch" style={{ background: j.hex }} />}{short}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {tab === "print" && (
@@ -505,4 +527,20 @@ function nearest(hex: string | null, slots: { slot: string; color: string }[]) {
   const target = rgb(hex);
   const d = (s: { color: string }) => Math.hypot(...rgb(s.color).map((c, i) => c - target[i]));
   return slots.reduce((best, s) => (d(s) < d(best) ? s : best)).slot;
+}
+
+/**
+ * A multi-part model's picker: its labelled jobs grouped by the words before the number
+ * ("Plant 1".."Plant 6" -> Plant: 1..6; "Funnel" on its own). Null for a one-job model.
+ */
+function pickerGroups(jobs: Model["jobs"]): { name: string; jobs: { job: Model["jobs"][number]; short: string }[] }[] | null {
+  const labelled = jobs.filter((j) => j.label);
+  if (labelled.length < 2) return null;
+  const groups = new Map<string, { job: Model["jobs"][number]; short: string }[]>();
+  for (const job of labelled) {
+    const m = job.label!.match(/^(.*?)\s*(\d+)$/);
+    const [name, short] = m ? [m[1], m[2]] : [job.label!, job.label!];
+    groups.set(name, [...(groups.get(name) ?? []), { job, short }]);
+  }
+  return [...groups].map(([name, js]) => ({ name, jobs: js }));
 }

@@ -22,6 +22,10 @@ export interface Job {
   scad: Record<string, string>;
   /** Multi-colour OpenSCAD jobs: each part renders with -D part="<name>" and prints on filament 1, 2, ... in order. */
   parts: { name: string; color: string }[];
+  /** A downloaded 3MF holding several parts: the object this job prints (see scripts/run.py). */
+  object?: string;
+  /** What the model page's part picker calls this job. */
+  label?: string;
 }
 
 export const hexFor = (color: string) => COLORS[color.toLowerCase()] ?? (color.startsWith("#") ? color : `#${color}`);
@@ -68,6 +72,8 @@ export function listJobs(): Job[] {
       // parameter overrides: [scad] for OpenSCAD (-D), [params] for nurb parts (keyword arguments)
       scad: Object.fromEntries(Object.entries((String(data.model).endsWith(".py") ? data.params : data.scad) ?? {}).map(([k, v]) => [k, String(v)])),
       parts: Object.entries(data.parts ?? {}).map(([name, color]) => ({ name, color: String(color) })),
+      object: data.object,
+      label: data.label,
     };
   });
 }
@@ -122,6 +128,13 @@ export function isStale(job: Job, perPlate = 1): boolean {
   return inputs.some((t) => t > sliced);
 }
 
+/** Labelled jobs in natural order ("Plant 2" before "Plant 10"), numbered ones before the rest; unlabelled keep their file order. */
+function byLabel(a: Job, b: Job): number {
+  if (!a.label || !b.label) return 0;
+  const numbered = (l: string) => (/\d/.test(l) ? 0 : 1);
+  return numbered(a.label) - numbered(b.label) || a.label.localeCompare(b.label, undefined, { numeric: true });
+}
+
 export function listModels(): Model[] {
   const jobs = listJobs();
   const r = rates();
@@ -134,7 +147,8 @@ export function listModels(): Model[] {
         const hit = files.find((f) => f.endsWith(ext));
         if (hit) { mesh = `models/${id}/${hit}`; break; }
       }
-      const modelJobs = jobs.filter((j) => j.model.startsWith(`models/${id}/`)); // the model file may sit deeper (a nurb part in parts/)
+      const modelJobs = jobs.filter((j) => j.model.startsWith(`models/${id}/`)) // the model file may sit deeper (a nurb part in parts/)
+        .sort(byLabel); // a multi-part model's picker order; its first job is the default and the thumbnail
       if (modelJobs[0]) mesh = modelJobs[0].model;
       const sourceFile = path.join(dir, id, "SOURCE.md");
       return {
@@ -145,6 +159,7 @@ export function listModels(): Model[] {
         source: fs.existsSync(sourceFile) ? fs.readFileSync(sourceFile, "utf8") : "",
         jobs: modelJobs.map((j) => ({
           name: j.name,
+          label: j.label ?? null,
           file: j.file,
           color: j.color ?? null,
           hex: j.parts[0] ? hexFor(j.parts[0].color) : j.color ? hexFor(j.color) : null,

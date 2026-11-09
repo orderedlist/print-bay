@@ -21,6 +21,7 @@ export interface Stats { time: string; seconds: number; grams: number; cost: Cos
 
 export interface ModelJob {
   name: string;
+  label: string | null; // a part of a multi-part model, as its picker shows it ("Plant 3")
   file: string;
   color: string | null;
   hex: string | null;
