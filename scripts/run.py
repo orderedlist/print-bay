@@ -21,6 +21,9 @@ together layer by layer and come off the bed as one piece. Each layer starts
 with the first part listed, so list what should go down first (a face-down
 inlay) first.
 
+A downloaded .3mf with several plates (parts in different colours, say) gets a
+job per plate: `plate = 2` slices just that plate.
+
 Set ORCA to your OrcaSlicer binary if it isn't at the macOS default.
 """
 import os
@@ -105,7 +108,7 @@ def slice_job(job, per_plate=1):
         ORCA,
         "--load-settings", f"{p['machine']};{process}",
         "--load-filaments", ";".join(str(f) for f in filaments),
-        "--slice", "0",
+        "--slice", str(job.get("plate", 0)),  # 0 = every plate
         *(["--arrange", "0", "--orient", "0"] if placed else []),
         "--outputdir", str(out),
         str(model),
@@ -186,12 +189,23 @@ def multi_filament(process, filament, colors, out):
 
 
 def single_filament(src, dest):
-    """Copy a 3MF with every object on filament 1, so our filament profile applies."""
+    """Copy a 3MF with every object on filament 1, so our filament profile applies.
+
+    Orca's CLI refuses files saved by Bambu Studio 2.x (exit 232, no message), so
+    the copy claims to be from 1.10; the objects, modifiers and layer ranges read fine.
+    Colour painting (paint_color on triangles) is dropped too: it outranks the object's
+    filament, so a pot painted filament 2 would swap filaments every layer.
+    """
     with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zout:
         for item in zin.infolist():
             data = zin.read(item.filename)
             if item.filename == "Metadata/model_settings.config":
                 data = re.sub(rb'(key="extruder" value=")\d+"', rb'\g<1>1"', data)
+            elif item.filename == "3D/3dmodel.model":
+                data = re.sub(rb'(<metadata name="Application">BambuStudio-)0*[2-9]\d*\.[\d.]+',
+                              rb'\g<1>01.10.00.00', data)
+            if item.filename.endswith(".model"):
+                data = re.sub(rb' paint_color="[^"]*"', b"", data)
             zout.writestr(item, data)
     return dest
 
