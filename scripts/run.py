@@ -260,7 +260,7 @@ def base_fill(zin, keep, fill):
     tris = []
     for i in range(n):
         j = (i + 1) % n
-        tris += [(i, n + i, j), (j, n + i, n + j), (2 * n, i, j), (2 * n + 1, n + j, n + i)]
+        tris += [(i, j, n + i), (j, n + j, n + i), (2 * n, j, i), (2 * n + 1, n + i, n + j)]  # normals out
     new_id = str(max(int(x) for x in re.findall(r'<object id="(\d+)"', sub + root)) + 1)
     disc = (f'<object id="{new_id}" type="model"><mesh><vertices>'
             + "".join(f'<vertex x="{x:.4f}" y="{y:.4f}" z="{z:.4f}"/>' for x, y, z in verts)

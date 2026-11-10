@@ -26,6 +26,8 @@ export interface Job {
   object?: string;
   /** What the model page's part picker calls this job. */
   label?: string;
+  /** A solid disc added under the object when slicing, filling a logo pressed into its base (see scripts/run.py). */
+  fillBase?: { radius: number; height: number };
 }
 
 export const hexFor = (color: string) => COLORS[color.toLowerCase()] ?? (color.startsWith("#") ? color : `#${color}`);
@@ -74,6 +76,7 @@ export function listJobs(): Job[] {
       parts: Object.entries(data.parts ?? {}).map(([name, color]) => ({ name, color: String(color) })),
       object: data.object,
       label: data.label,
+      fillBase: data.fill_base ? { radius: Number(data.fill_base.radius), height: Number(data.fill_base.height) } : undefined,
     };
   });
 }

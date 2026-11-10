@@ -60,7 +60,7 @@ export function threemfPieces(src: string, object?: string): number {
  * The 3MF's build, placed as the file lays it out; with `object`, only the object of that name.
  * Modifier, support and other non-model volumes are left out.
  */
-function threemfToStl(src: string, dest: string, object?: string) {
+function threemfToStl(src: string, dest: string, object?: string, fill?: { radius: number; height: number }) {
   const files = unzipSync(fs.readFileSync(src), { filter: (f) => f.name.endsWith(".model") || f.name === "Metadata/model_settings.config" });
   const only = namedObjects(files, object);
   const objects = new Map<string, Obj3mf>(); // "<file>#<id>"
@@ -103,7 +103,28 @@ function threemfToStl(src: string, dest: string, object?: string) {
   } else {
     for (const [key, o] of objects) if (!o.components.length) emit(key, IDENTITY);
   }
+  if (fill && triangles.length) triangles.push(...baseFill(triangles, fill));
   writeStl(triangles, dest);
+}
+
+/**
+ * The disc run.py's `fill_base` adds when slicing: centred on the part, flush with its
+ * underside, so the preview shows the flat base that prints (not the logo pressed into it).
+ */
+function baseFill(tris: Vec[][], { radius, height }: { radius: number; height: number }): Vec[][] {
+  const lo: Vec = [Infinity, Infinity, Infinity], hi: Vec = [-Infinity, -Infinity, -Infinity];
+  for (const t of tris) for (const v of t) for (let c = 0; c < 3; c++) { lo[c] = Math.min(lo[c], v[c]); hi[c] = Math.max(hi[c], v[c]); }
+  const [cx, cy, z0] = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, lo[2]];
+  const n = 96, z1 = z0 + height;
+  const at = (i: number): [number, number] => [cx + radius * Math.cos((2 * Math.PI * i) / n), cy + radius * Math.sin((2 * Math.PI * i) / n)];
+  const out: Vec[][] = [];
+  for (let i = 0; i < n; i++) {
+    const [ax, ay] = at(i), [bx, by] = at(i + 1);
+    // wound so normals face out: sides outward, bottom down, top up
+    out.push([[ax, ay, z0], [bx, by, z0], [ax, ay, z1]], [[bx, by, z0], [bx, by, z1], [ax, ay, z1]],
+      [[cx, cy, z0], [bx, by, z0], [ax, ay, z0]], [[cx, cy, z1], [ax, ay, z1], [bx, by, z1]]);
+  }
+  return out;
 }
 
 /** Triangles of a binary STL. */
@@ -150,7 +171,8 @@ export function meshFor(modelId: string, opts: { print?: boolean; job?: string }
   const stamp = path.join(CACHE, `${name}.stl.key`);
   const parts = src.endsWith(".scad") ? job?.parts ?? [] : [];
   // layout: 2 = 3MFs placed as their build lays them out (earlier caches stacked every object at its origin)
-  const key = JSON.stringify({ mtime: fs.statSync(src).mtimeMs, params, parts, ...(src.endsWith(".3mf") ? { layout: 2, object } : {}) });
+  const fill = src.endsWith(".3mf") ? job?.fillBase : undefined;
+  const key = JSON.stringify({ mtime: fs.statSync(src).mtimeMs, params, parts, ...(src.endsWith(".3mf") ? { layout: 2, object, fill } : {}) });
   if (fs.existsSync(dest) && fs.existsSync(stamp) && fs.readFileSync(stamp, "utf8") === key)
     return Promise.resolve(dest);
 
@@ -174,7 +196,7 @@ export function meshFor(modelId: string, opts: { print?: boolean; job?: string }
           await run(OPENSCAD, [...defs, "-o", tmp, src], { maxBuffer: 1 << 24 });
         }
       } else {
-        threemfToStl(src, tmp, object);
+        threemfToStl(src, tmp, object, fill);
       }
       fs.renameSync(tmp, dest);
       fs.writeFileSync(stamp, key);
