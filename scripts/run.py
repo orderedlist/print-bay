@@ -9,6 +9,7 @@ run.py - slice a job with OrcaSlicer's CLI, then print it on the K2.
   python scripts/run.py jobs/stacking-box.toml --color red  # override the job's color
   python scripts/run.py jobs/ball-marker.toml --per-plate 20 # 20 on the bed at once (OpenSCAD jobs)
   python scripts/run.py jobs/succulent-pot-3.toml --material wood # wood-fill spool: gcode/<job>-wood.gcode
+  python scripts/run.py jobs/succulent-pot-3.toml --nozzle 0.6     # 0.6 mm nozzle: gcode/<job>-0.6mm.gcode
 
 A job prints in its `color` (a name like "black" or a hex code) from whichever
 CFS slot holds it. A multi-colour OpenSCAD job lists its parts instead:
@@ -63,6 +64,10 @@ MAX_COLOR_DISTANCE = 120  # RGB distance; further than this isn't a match
 # (profiles/k2-wood.json, from Orca's "CR-Wood @K2 Plus-all"): 210 C so it oozes less,
 # 10 mm3/s so the walls slow to about 110 mm/s, and 1 mm retraction.
 MATERIALS = {"wood": "profiles/k2-wood.json"}
+# Nozzles other than the stock 0.4: the machine profile in place of the job's, and line
+# widths and speeds laid over its process (from Orca's "Creality K2 0.6 nozzle" and
+# "0.30mm Standard @Creality K2 0.6 nozzle"; layer heights stay the job's).
+NOZZLES = {"0.6": {"machine": "profiles/k2-machine-0.6.json", "process": "profiles/k2-nozzle-0.6.json"}}
 
 
 def load_job(path):
@@ -74,29 +79,34 @@ def load_job(path):
     return job
 
 
-def gcode_name(job, per_plate=1, material=None):
-    """gcode/<job>.gcode, gcode/<job>-x<n>.gcode for n to a plate, then -<material> if not PLA."""
+def gcode_name(job, per_plate=1, material=None, nozzle=None):
+    """gcode/<job>.gcode, gcode/<job>-x<n>.gcode for n to a plate, then -<material> if not PLA, then -<nozzle>mm if not 0.4."""
     name = f"{job['name']}-x{per_plate}" if per_plate > 1 else job["name"]
-    return f"{name}-{material}" if material else name
+    name = f"{name}-{material}" if material else name
+    return f"{name}-{nozzle}mm" if nozzle else name
 
 
-def slice_job(job, per_plate=1, material=None):
+def slice_job(job, per_plate=1, material=None, nozzle=None):
     model = ROOT / job["model"]
     p = {k: ROOT / v for k, v in job["profiles"].items()}
     if material:
         p["filament"] = ROOT / MATERIALS[material]
+    if nozzle:
+        p["machine"] = ROOT / NOZZLES[nozzle]["machine"]
+        p["nozzle"] = ROOT / NOZZLES[nozzle]["process"]
     for f in [model, *p.values()]:
         if not f.exists():
             sys.exit(f"Missing file: {f.relative_to(ROOT)}")
 
     if per_plate > 1 and model.suffix not in (".scad", ".py"):
         sys.exit("Filling the plate works for OpenSCAD and nurb models; this one is a ready-made file.")
-    out = ROOT / "gcode" / gcode_name(job, per_plate, material)
+    out = ROOT / "gcode" / gcode_name(job, per_plate, material, nozzle)
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     plate = 0  # 0 = every plate
     # the job's [overrides.process] go on top every slice, so a job can tune a shared profile
-    process, filaments = with_overrides(p["process"], job.get("overrides", {}).get("process", {}), out), [p["filament"]]
+    overrides = {**(json.loads(p["nozzle"].read_text()) if nozzle else {}), **job.get("overrides", {}).get("process", {})}
+    process, filaments = with_overrides(p["process"], overrides, out), [p["filament"]]
     parts = job.get("parts")
     if parts:
         if model.suffix != ".scad":
@@ -132,7 +142,7 @@ def slice_job(job, per_plate=1, material=None):
         print(res.stdout[-2000:], res.stderr[-2000:], sep="\n")
         sys.exit("Slicing failed (output above).")
 
-    final = ROOT / "gcode" / f"{gcode_name(job, per_plate, material)}.gcode"
+    final = ROOT / "gcode" / f"{gcode_name(job, per_plate, material, nozzle)}.gcode"
     shutil.move(gcodes[-1], final)
     shutil.rmtree(out, ignore_errors=True)
     print(f"G-code: {final.relative_to(ROOT)}")
@@ -170,7 +180,7 @@ def with_overrides(process, overrides, out):
     if not overrides:
         return process
     f = out / "process.json"
-    f.write_text(json.dumps({**json.loads(Path(process).read_text()), **{k: str(v) for k, v in overrides.items()}}))
+    f.write_text(json.dumps({**json.loads(Path(process).read_text()), **{k: v if isinstance(v, list) else str(v) for k, v in overrides.items()}}))
     return f
 
 
@@ -353,13 +363,14 @@ def main():
     ap.add_argument("--color")
     ap.add_argument("--per-plate", type=int, default=1, help="lay this many out on the bed at once")
     ap.add_argument("--material", choices=sorted(MATERIALS), help="slice for this filament instead of PLA")
+    ap.add_argument("--nozzle", choices=sorted(NOZZLES), help="slice for this nozzle (mm) instead of the stock 0.4")
     a = ap.parse_args()
 
     job = load_job(a.job)
-    gcode = ROOT / "gcode" / f"{gcode_name(job, a.per_plate, a.material)}.gcode"
+    gcode = ROOT / "gcode" / f"{gcode_name(job, a.per_plate, a.material, a.nozzle)}.gcode"
 
     if not a.no_slice:
-        gcode = slice_job(job, a.per_plate, a.material)
+        gcode = slice_job(job, a.per_plate, a.material, a.nozzle)
     elif not gcode.exists():
         sys.exit(f"No G-code at {gcode.relative_to(ROOT)}; run without --no-slice.")
     if a.slice_only:

@@ -8,6 +8,7 @@ import { CAMERA_URL, HOST, K2_HOST, PORT, ROOT, WEB_DIST } from "./config.js";
 import { bus, publish } from "./events.js";
 import { getJob, isMaterial, listModels, rates, scadParams, setScadParams } from "./jobs.js";
 import { meshFor } from "./mesh.js";
+import { isNozzle, setNozzle, getNozzle } from "./nozzle.js";
 import { checkModel } from "./modelchecks.js";
 import { toolpathsFor } from "./gcode.js";
 import * as moonraker from "./moonraker.js";
@@ -45,7 +46,14 @@ export async function start(opts: StartOptions = {}) {
   });
 
   // ---- printer ----
-  app.get("/api/printer", async () => ({ host: K2_HOST, camera: CAMERA_URL }));
+  app.get("/api/printer", async () => ({ host: K2_HOST, camera: CAMERA_URL, nozzle: getNozzle() }));
+  app.put<{ Body: { nozzle?: string } }>("/api/printer/nozzle", async (req, reply) => {
+    const nozzle = req.body?.nozzle;
+    if (!isNozzle(nozzle)) return reply.status(400).send({ error: `Unknown nozzle "${nozzle}"` });
+    setNozzle(nozzle);
+    publish("models", null); // every job's slice and stats are for the nozzle now set
+    return { nozzle };
+  });
   app.get("/api/status", async () => status);
   for (const action of ["pause", "resume", "cancel"] as const) {
     app.post(`/api/printer/${action}`, async () => {

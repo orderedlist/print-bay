@@ -57,7 +57,7 @@ function parse(text: string) {
 export function toolpathsFor(job: string): Buffer | null {
   const gcode = gcodePath(job);
   if (!fs.existsSync(gcode)) return null;
-  const dest = path.join(CACHE, `${job}.paths`);
+  const dest = path.join(CACHE, `${path.basename(gcode, ".gcode")}.paths`); // per G-code file: one per nozzle
   if (fs.existsSync(dest) && fs.statSync(dest).mtimeMs >= fs.statSync(gcode).mtimeMs) return fs.readFileSync(dest);
 
   const { segs, layerOf, layers } = parse(fs.readFileSync(gcode, "utf8"));

@@ -4,6 +4,7 @@ import path from "node:path";
 import { parse } from "smol-toml";
 import { execFileSync } from "node:child_process";
 import { NURB_PYTHON, ROOT } from "./config.js";
+import { getNozzle, NOZZLE_PROFILES, STOCK, type Nozzle } from "./nozzle.js";
 
 export const COLORS: Record<string, string> = {
   black: "#000000", white: "#FFFFFF", grey: "#808080", gray: "#808080",
@@ -114,10 +115,11 @@ export function cost(grams: number, secs: number, r = rates()): Cost {
 
 /**
  * gcode/<job>.gcode, gcode/<job>-x<n>.gcode for n laid out on one plate, then -<material>
- * for a spool that isn't PLA (see scripts/run.py).
+ * for a spool that isn't PLA, then -<nozzle>mm for a nozzle that isn't the stock 0.4 (see
+ * scripts/run.py). The nozzle is the one set in the app.
  */
-export const gcodePath = (job: string, perPlate = 1, material: Material = "pla") =>
-  abs(`gcode/${perPlate > 1 ? `${job}-x${perPlate}` : job}${material === "pla" ? "" : `-${material}`}.gcode`);
+export const gcodePath = (job: string, perPlate = 1, material: Material = "pla", nozzle: Nozzle = getNozzle()) =>
+  abs(`gcode/${perPlate > 1 ? `${job}-x${perPlate}` : job}${material === "pla" ? "" : `-${material}`}${nozzle === STOCK ? "" : `-${nozzle}mm`}.gcode`);
 
 export function gcodeStats(job: string, r = rates(), perPlate = 1, material: Material = "pla"): Stats | null {
   const file = gcodePath(job, perPlate, material);
@@ -141,7 +143,8 @@ export function isStale(job: Job, perPlate = 1, material: Material = "pla"): boo
   const sliced = mtime(gcodePath(job.name, perPlate, material));
   if (!sliced) return true;
   const profiles = { ...job.profiles, ...(material === "pla" ? {} : { filament: MATERIAL_PROFILES[material] }) };
-  const inputs = [job.model, job.file, ...Object.values(profiles)].map((p) => mtime(abs(p)));
+  const nozzle = getNozzle();
+  const inputs = [job.model, job.file, ...Object.values(profiles), ...NOZZLE_PROFILES[nozzle]].map((p) => mtime(abs(p)));
   return inputs.some((t) => t > sliced);
 }
 

@@ -52,6 +52,14 @@ strings less. `run.py --material wood` writes `gcode/<job>-wood.gcode`; in the
 app, the print panel's Material switch picks it, and it defaults to Wood when
 the printer has the picked slot set to CR-Wood.
 
+For a 0.6 mm nozzle, `run.py --nozzle 0.6` slices with
+`profiles/k2-machine-0.6.json` (Orca's "Creality K2 0.6 nozzle", with the same
+purge-line edit) and lays `profiles/k2-nozzle-0.6.json` over the job's process:
+the line widths and speeds of Orca's "0.30mm Standard @Creality K2 0.6 nozzle".
+Layer heights stay the job's. It writes `gcode/<job>-0.6mm.gcode` (after any
+`-wood`). The printer doesn't report a nozzle swap, so in the app set it under
+Nozzle size in the printer panel; every slice and print follows it.
+
 ## Adding a model
 
 1. Make `models/<name>/`, drop in the file (.3mf, .stl, or .scad), add `SOURCE.md`.
