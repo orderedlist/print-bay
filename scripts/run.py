@@ -23,7 +23,9 @@ inlay) first.
 
 A downloaded .3mf holding several parts (a plant and its pot, in different
 colours) gets a job per part: `object = "Funnel"` slices just the object of that
-name, on the plate the file puts it on.
+name, on the plate the file puts it on. `fill_base = { radius = 25, height = 0.6 }`
+also fills the bottom that far up within that radius of the object's middle,
+smoothing away a logo pressed into its base.
 
 Set ORCA to your OrcaSlicer binary if it isn't at the macOS default.
 """
@@ -100,7 +102,7 @@ def slice_job(job, per_plate=1):
                else render_nurb(model, out / "model.stl", job.get("params", {})))
         model = parts3mf.write([(job["name"], stl, 1)], out / "model.3mf", job["name"], copies=per_plate)
     elif model.suffix == ".3mf":
-        model, plate = single_filament(model, out / "model.3mf", job.get("object"))
+        model, plate = single_filament(model, out / "model.3mf", job.get("object"), job.get("fill_base"))
 
     # OpenSCAD models arrive centred and laid out as the .scad intends (see parts3mf); Orca's
     # auto-arrange would spin them (a 45-degree turn of a two-colour inlay, say), so it's off
@@ -190,7 +192,7 @@ def multi_filament(process, filament, colors, out):
     return f, files
 
 
-def single_filament(src, dest, only=None):
+def single_filament(src, dest, only=None, fill_base=None):
     """Copy a 3MF with every object on filament 1, so our filament profile applies.
 
     With `only` (an object's name), the copy keeps just that object; returns the
@@ -200,14 +202,17 @@ def single_filament(src, dest, only=None):
     the copy claims to be from 1.10; the objects, modifiers and layer ranges read fine.
     Colour painting (paint_color on triangles) is dropped too: it outranks the object's
     filament, so a pot painted filament 2 would swap filaments every layer.
+
+    `fill_base` (needs `only`) adds a solid disc to that object, flush with its underside.
     """
     plate = 0
     with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zout:
         keep = None
         if only:
             keep, plate = object_on_plate(zin.read("Metadata/model_settings.config").decode(), only, src)
+        extra = base_fill(zin, keep, fill_base) if keep and fill_base else {}
         for item in zin.infolist():
-            data = zin.read(item.filename)
+            data = extra.get(item.filename) or zin.read(item.filename)
             if item.filename == "Metadata/model_settings.config":
                 data = re.sub(rb'(key="extruder" value=")\d+"', rb'\g<1>1"', data)
                 if keep:  # the other objects' settings and plate entries go with their build items
@@ -227,6 +232,50 @@ def single_filament(src, dest, only=None):
                 data = re.sub(rb' paint_color="[^"]*"', b"", data)
             zout.writestr(item, data)
     return dest, plate
+
+
+def base_fill(zin, keep, fill):
+    """Changed files that add a disc (radius, height mm) under build object `keep`, as one more solid part.
+
+    The disc sits in the object's own coordinates, centred on its main mesh and flush with
+    that mesh's underside (after the component's transform), so the slicer unions it with
+    the base: a recess up to `height` deep inside `radius` prints solid.
+    """
+    import math
+    root = zin.read("3D/3dmodel.model").decode()
+    obj = re.search(rf'<object id="{keep}"[^>]*>(.*?)</object>', root, re.S)
+    comp = re.search(r'<component p:path="([^"]+)" objectid="(\d+)"[^>]*?transform="([^"]+)"', obj[1])
+    if not comp:
+        sys.exit("fill_base needs an object made of parts (a Bambu/Orca 3MF).")
+    path, mesh_id, m = comp[1].lstrip("/"), comp[2], [float(x) for x in comp[3].split()]
+    sub = zin.read(path).decode()
+    mesh = re.search(rf'<object id="{mesh_id}"[^>]*>(.*?)</object>', sub, re.S)[1]
+    pts = [(float(a), float(b), float(c)) for a, b, c in re.findall(r'<vertex x="([^"]+)" y="([^"]+)" z="([^"]+)"', mesh)]
+    pts = [tuple(x * m[c] + y * m[3 + c] + z * m[6 + c] + m[9 + c] for c in range(3)) for x, y, z in pts]
+    xs, ys, zs = zip(*pts)
+    cx, cy, z0 = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2, min(zs)
+    r, h, n = float(fill["radius"]), float(fill["height"]), 96
+    ring = [(cx + r * math.cos(2 * math.pi * i / n), cy + r * math.sin(2 * math.pi * i / n)) for i in range(n)]
+    verts = [(x, y, z0) for x, y in ring] + [(x, y, z0 + h) for x, y in ring] + [(cx, cy, z0), (cx, cy, z0 + h)]
+    tris = []
+    for i in range(n):
+        j = (i + 1) % n
+        tris += [(i, n + i, j), (j, n + i, n + j), (2 * n, i, j), (2 * n + 1, n + j, n + i)]
+    new_id = str(max(int(x) for x in re.findall(r'<object id="(\d+)"', sub + root)) + 1)
+    disc = (f'<object id="{new_id}" type="model"><mesh><vertices>'
+            + "".join(f'<vertex x="{x:.4f}" y="{y:.4f}" z="{z:.4f}"/>' for x, y, z in verts)
+            + "</vertices><triangles>" + "".join(f'<triangle v1="{a}" v2="{b}" v3="{c}"/>' for a, b, c in tris)
+            + "</triangles></mesh></object>\n")
+    sub = sub.replace("</resources>", disc + "</resources>", 1)
+    root = re.sub(rf'(<object id="{keep}"[^>]*>.*?)(</components>)',
+                  lambda mm: mm[1] + f'<component p:path="/{path}" objectid="{new_id}" transform="1 0 0 0 1 0 0 0 1 0 0 0" />\n' + mm[2],
+                  root, count=1, flags=re.S)
+    config = zin.read("Metadata/model_settings.config").decode()
+    config = re.sub(rf'(<object id="{keep}">.*?)(\s*</object>)',
+                    lambda mm: mm[1] + f'\n    <part id="{new_id}" subtype="normal_part">\n      <metadata key="name" value="base fill"/>\n'
+                    '      <metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/>\n    </part>' + mm[2],
+                    config, count=1, flags=re.S)
+    return {path: sub.encode(), "3D/3dmodel.model": root.encode(), "Metadata/model_settings.config": config.encode()}
 
 
 def object_on_plate(config, name, src):
