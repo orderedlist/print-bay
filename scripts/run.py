@@ -8,6 +8,7 @@ run.py - slice a job with OrcaSlicer's CLI, then print it on the K2.
   python scripts/run.py jobs/stacking-box.toml --copies 1   # override copy count
   python scripts/run.py jobs/stacking-box.toml --color red  # override the job's color
   python scripts/run.py jobs/ball-marker.toml --per-plate 20 # 20 on the bed at once (OpenSCAD jobs)
+  python scripts/run.py jobs/succulent-pot-3.toml --material wood # wood-fill spool: gcode/<job>-wood.gcode
 
 A job prints in its `color` (a name like "black" or a hex code) from whichever
 CFS slot holds it. A multi-colour OpenSCAD job lists its parts instead:
@@ -58,6 +59,10 @@ COLORS = {
     "blue": "#0A2989", "purple": "#5E43B7", "pink": "#E4BDD0", "brown": "#7C4B00",
 }
 MAX_COLOR_DISTANCE = 120  # RGB distance; further than this isn't a match
+# Filament profiles for spools that aren't plain PLA, in place of the job's own. Wood fill
+# (profiles/k2-wood.json, from Orca's "CR-Wood @K2 Plus-all"): 210 C so it oozes less,
+# 10 mm3/s so the walls slow to about 110 mm/s, and 1 mm retraction.
+MATERIALS = {"wood": "profiles/k2-wood.json"}
 
 
 def load_job(path):
@@ -69,21 +74,24 @@ def load_job(path):
     return job
 
 
-def gcode_name(job, per_plate=1):
-    """gcode/<job>.gcode, or gcode/<job>-x<n>.gcode for n to a plate."""
-    return f"{job['name']}-x{per_plate}" if per_plate > 1 else job["name"]
+def gcode_name(job, per_plate=1, material=None):
+    """gcode/<job>.gcode, gcode/<job>-x<n>.gcode for n to a plate, then -<material> if not PLA."""
+    name = f"{job['name']}-x{per_plate}" if per_plate > 1 else job["name"]
+    return f"{name}-{material}" if material else name
 
 
-def slice_job(job, per_plate=1):
+def slice_job(job, per_plate=1, material=None):
     model = ROOT / job["model"]
     p = {k: ROOT / v for k, v in job["profiles"].items()}
+    if material:
+        p["filament"] = ROOT / MATERIALS[material]
     for f in [model, *p.values()]:
         if not f.exists():
             sys.exit(f"Missing file: {f.relative_to(ROOT)}")
 
     if per_plate > 1 and model.suffix not in (".scad", ".py"):
         sys.exit("Filling the plate works for OpenSCAD and nurb models; this one is a ready-made file.")
-    out = ROOT / "gcode" / gcode_name(job, per_plate)
+    out = ROOT / "gcode" / gcode_name(job, per_plate, material)
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     plate = 0  # 0 = every plate
@@ -124,7 +132,7 @@ def slice_job(job, per_plate=1):
         print(res.stdout[-2000:], res.stderr[-2000:], sep="\n")
         sys.exit("Slicing failed (output above).")
 
-    final = ROOT / "gcode" / f"{gcode_name(job, per_plate)}.gcode"
+    final = ROOT / "gcode" / f"{gcode_name(job, per_plate, material)}.gcode"
     shutil.move(gcodes[-1], final)
     shutil.rmtree(out, ignore_errors=True)
     print(f"G-code: {final.relative_to(ROOT)}")
@@ -344,13 +352,14 @@ def main():
     ap.add_argument("--copies", type=int)
     ap.add_argument("--color")
     ap.add_argument("--per-plate", type=int, default=1, help="lay this many out on the bed at once")
+    ap.add_argument("--material", choices=sorted(MATERIALS), help="slice for this filament instead of PLA")
     a = ap.parse_args()
 
     job = load_job(a.job)
-    gcode = ROOT / "gcode" / f"{gcode_name(job, a.per_plate)}.gcode"
+    gcode = ROOT / "gcode" / f"{gcode_name(job, a.per_plate, a.material)}.gcode"
 
     if not a.no_slice:
-        gcode = slice_job(job, a.per_plate)
+        gcode = slice_job(job, a.per_plate, a.material)
     elif not gcode.exists():
         sys.exit(f"No G-code at {gcode.relative_to(ROOT)}; run without --no-slice.")
     if a.slice_only:

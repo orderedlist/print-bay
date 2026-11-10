@@ -6,7 +6,7 @@ import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import { CAMERA_URL, HOST, K2_HOST, PORT, ROOT, WEB_DIST } from "./config.js";
 import { bus, publish } from "./events.js";
-import { getJob, listModels, rates, scadParams, setScadParams } from "./jobs.js";
+import { getJob, isMaterial, listModels, rates, scadParams, setScadParams } from "./jobs.js";
 import { meshFor } from "./mesh.js";
 import { checkModel } from "./modelchecks.js";
 import { toolpathsFor } from "./gcode.js";
@@ -79,14 +79,16 @@ export async function start(opts: StartOptions = {}) {
     publish("models", null);
     return scadParams(getJob(job.name));
   });
-  app.post<{ Params: { job: string }; Body: { perPlate?: number } | undefined }>("/api/jobs/:job/slice", async (req, reply) => {
+  app.post<{ Params: { job: string }; Body: { perPlate?: number; material?: string } | undefined }>("/api/jobs/:job/slice", async (req, reply) => {
     const job = getJob(req.params.job);
-    slice(job.name, Math.max(1, Math.floor(req.body?.perPlate ?? 1))).catch(() => {}); // progress and failure arrive over SSE
+    const material = req.body?.material ?? "pla";
+    if (!isMaterial(material)) return reply.status(400).send({ error: `Unknown material "${material}"` });
+    slice(job.name, Math.max(1, Math.floor(req.body?.perPlate ?? 1)), material).catch(() => {}); // progress and failure arrive over SSE
     return reply.status(202).send({ ok: true });
   });
 
   // ---- printing ----
-  app.post<{ Body: { job: string; color?: string; colors?: Record<string, string>; copies: number; perPlate?: number; startNow: boolean } }>("/api/print", async (req) =>
+  app.post<{ Body: { job: string; color?: string; colors?: Record<string, string>; copies: number; perPlate?: number; material?: string; startNow: boolean } }>("/api/print", async (req) =>
     print(req.body));
   app.get("/api/queue", async () => getQueue());
   app.post("/api/queue/next", async () => startNext());

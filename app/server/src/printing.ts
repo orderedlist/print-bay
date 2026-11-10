@@ -7,7 +7,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { CACHE } from "./config.js";
 import { publish } from "./events.js";
-import { gcodePath, getJob, hexFor, isStale } from "./jobs.js";
+import { gcodePath, getJob, hexFor, isMaterial, isStale, type Material } from "./jobs.js";
 import * as moonraker from "./moonraker.js";
 import { slice } from "./slice.js";
 
@@ -20,6 +20,7 @@ export interface QueueEntry {
   hex: string;
   hexes?: string[]; // every colour, for multi-colour prints
   slot: string;
+  material?: Material; // when not PLA
   perPlate?: number; // parts on each plate, when more than one
   filename: string; // already uploaded to the printer
   copy: number;
@@ -78,8 +79,9 @@ async function startEntry(entry: QueueEntry) {
 /**
  * `color` is the spool for a one-colour job; `colors` gives each part of a
  * multi-colour job its spool (by part name), defaulting to the job's own colours.
+ * `material` slices for that filament; left out, it's wood if a picked spool is set as wood on the printer.
  */
-export async function print(opts: { job: string; color?: string; colors?: Record<string, string>; copies: number; perPlate?: number; startNow: boolean }) {
+export async function print(opts: { job: string; color?: string; colors?: Record<string, string>; copies: number; perPlate?: number; material?: string; startNow: boolean }) {
   const job = getJob(opts.job);
   const copies = Math.max(1, Math.min(20, Math.floor(opts.copies))); // plates, one after another
   const perPlate = Math.max(1, Math.min(400, Math.floor(opts.perPlate ?? 1)));
@@ -89,17 +91,20 @@ export async function print(opts: { job: string; color?: string; colors?: Record
   if (!colors.every(Boolean)) throw fail("Pick a colour");
   const slots = colors.map((c) => findSlot(c, status.slots));
   const slot = slots[0];
+  if (opts.material !== undefined && !isMaterial(opts.material)) throw fail(`Unknown material "${opts.material}"`);
+  const material: Material = opts.material ?? (slots.some((s) => s.material === "wood") ? "wood" : "pla");
+  if (material !== "pla" && perPlate > 1) throw fail(`Several to a plate isn't set up for ${material} yet`);
   if (opts.startNow && !moonraker.IDLE_STATES.has(status.state))
     throw fail(`The printer is ${status.state}; add it to the queue instead`, 409);
 
-  if (isStale(job, perPlate)) await slice(job.name, perPlate);
-  const file = forSlots(gcodePath(job.name, perPlate), slots);
+  if (isStale(job, perPlate, material)) await slice(job.name, perPlate, material);
+  const file = forSlots(gcodePath(job.name, perPlate, material), slots);
   await moonraker.upload(file);
 
   const entries = Array.from({ length: copies }, (_, i): QueueEntry => ({
     id: randomUUID(), job: job.name, color: colors.join(" + "), hex: slot.color,
     ...(slots.length > 1 ? { hexes: slots.map((s) => s.color) } : {}), slot: slots.map((s) => s.slot).join(" + "),
-    ...(perPlate > 1 ? { perPlate } : {}),
+    ...(perPlate > 1 ? { perPlate } : {}), ...(material === "pla" ? {} : { material }),
     filename: path.basename(file), copy: i + 1, of: copies,
   }));
   let started = false;

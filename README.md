@@ -40,6 +40,13 @@ Orca stores them as JSON in
 `~/Library/Application Support/OrcaSlicer/user/default/{machine,process,filament}/`.
 Copy them into `profiles/` with the names the job file uses.
 
+Wood-fill spools (CR-Wood) slice with `profiles/k2-wood.json` in place of the
+job's filament profile: Orca's "CR-Wood @K2 Plus-all" at 210 °C (215 °C first
+layer), 10 mm³/s (walls slow to about 110 mm/s) and 1 mm retraction, so it
+strings less. `run.py --material wood` writes `gcode/<job>-wood.gcode`; in the
+app, the print panel's Material switch picks it, and it defaults to Wood when
+the printer has the picked slot set to CR-Wood.
+
 ## Adding a model
 
 1. Make `models/<name>/`, drop in the file (.3mf, .stl, or .scad), add `SOURCE.md`.

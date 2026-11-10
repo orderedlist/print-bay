@@ -7,7 +7,7 @@ import { ModelViewer, SEVERITY_COLORS, type ViewAvailability, type ViewMode } fr
 import { Params } from "../components/Params";
 import { ICONS, Toolbar, type Action } from "../components/Toolbar";
 import type { Theme } from "../theme";
-import { IDLE_STATES, type AgentSession, type CheckReport, type Model, type ScadParam } from "../types";
+import { IDLE_STATES, type AgentSession, type CheckReport, type Material, type Model, type ScadParam } from "../types";
 import { plateFit } from "../plate";
 import { stateLabel } from "./PrinterPanel";
 
@@ -137,7 +137,7 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   const log = job ? live.slice[job.name] ?? [] : [];
   const slicing = !!job && (job.slicing || log.at(-1)?.state === "running");
   const [perPlate, setPerPlate] = useState(1); // copies laid out on one plate
-  const slice = () => job && api(`/api/jobs/${job.name}/slice`, { method: "POST", json: { perPlate } }).catch((e) => toast(e.message, true));
+  const slice = () => job && api(`/api/jobs/${job.name}/slice`, { method: "POST", json: { perPlate, material } }).catch((e) => toast(e.message, true));
 
   // ---- parameters ----
   const [params, setParams] = useState<ScadParam[]>([]);
@@ -171,7 +171,8 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   const [copies, setCopies] = useState(job?.copies ?? 1);
   const [confirm, setConfirm] = useState(false);
   const [sending, setSending] = useState(false);
-  useEffect(() => { setPicked({}); setCopies(job?.copies ?? 1); }, [job?.name]); // a different part: its own colour and count
+  const [materialPick, setMaterialPick] = useState<Material | null>(null); // null: as the printer has the spool set
+  useEffect(() => { setPicked({}); setCopies(job?.copies ?? 1); setMaterialPick(null); }, [job?.name]); // a different part: its own colour and count
   useEffect(() => { // default to the spool nearest the job's color, once the printer reports them
     const missing = colorways.filter((c) => !picked[c.key]);
     if (missing.length && slots.length)
@@ -180,13 +181,18 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   const chosenFor = (key: string) => slots.find((s) => s.slot === picked[key]);
   const chosenAll = colorways.map((c) => chosenFor(c.key));
   const chosen = chosenAll.every(Boolean) ? chosenAll[0] : undefined;
-  const colorsText = chosenAll.map((c) => (c ? colorName(c.color).toLowerCase() : "?")).join(" and ");
+  // wood fill slices with its own filament profile (cooler, slower, more retraction); one copy to a plate only
+  const spoolMaterial: Material = chosenAll.some((s) => s?.material === "wood") ? "wood" : "pla";
+  const material: Material = perPlate > 1 ? "pla" : materialPick ?? spoolMaterial;
+  const wood = material === "wood";
+  const stale = wood ? !!job?.wood.stale : !!job?.stale;
+  const colorsText = chosenAll.map((c) => (c ? colorName(c.color).toLowerCase() : "?")).join(" and ") + (wood ? " wood" : "");
   const idle = status ? IDLE_STATES.has(status.state) : false;
   // how many fit on one plate (OpenSCAD models: the slicer lays them out), from the size as printed
   const fit = parametric && checks ? plateFit(checks.size[0], checks.size[1], multi) : 1;
   useEffect(() => { if (perPlate > fit) setPerPlate(fit); }, [fit]); // eslint-disable-line react-hooks/exhaustive-deps
   const plate = perPlate > 1 ? job?.plates.find((p) => p.perPlate === perPlate) : undefined;
-  const exact = perPlate === 1 ? job?.stats : plate && !plate.stale ? plate.stats : null;
+  const exact = perPlate === 1 ? (wood ? job?.wood.stats : job?.stats) : plate && !plate.stale ? plate.stats : null;
   // until this plate is sliced, draw a line through the nearest counts that are: plates share
   // travel and colour swaps, so one copy times n would overestimate badly
   const stats = exact ?? (job?.stats && perPlate > 1 ? interpolate(perPlate, [
@@ -209,8 +215,8 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
     try {
       const r = await api<{ started: boolean; queued: number }>("/api/print", {
         method: "POST", json: multi
-          ? { job: job.name, colors: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.color])), copies, perPlate, startNow }
-          : { job: job.name, color: chosen.color, copies, perPlate, startNow },
+          ? { job: job.name, colors: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.color])), copies, perPlate, material, startNow }
+          : { job: job.name, color: chosen.color, copies, perPlate, material, startNow },
       });
       const what = `${title(model.id)}${job.label ? ` (${job.label})` : ""} in ${colorsText}`;
       toast(r.started
@@ -226,8 +232,8 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
     else submit(false);
   };
   const total = stats ? `${estimated ? "≈ " : ""}${duration(stats.seconds * copies)}` : null;
-  const ctaLabel = sending ? (job?.stale ? "Slicing & sending…" : "Sending…")
-    : `${idle ? "Print" : "Queue"}${count > 1 ? ` ${count}` : ""}${total ? ` · ${total}` : job?.stale ? " · slices first" : ""}`;
+  const ctaLabel = sending ? (stale ? "Slicing & sending…" : "Sending…")
+    : `${idle ? "Print" : "Queue"}${count > 1 ? ` ${count}` : ""}${total ? ` · ${total}` : stale ? " · slices first" : ""}`;
 
   const actions: Action[] = [
     { label: "Print…", icon: ICONS.print, run: print, disabled: !job || !chosen, accent: true },
@@ -349,6 +355,19 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
                     );
                   })}
                   {multi && <div className="faint" style={{ fontSize: 12 }}>One print: the CFS swaps colour within each layer, so it comes off the bed as one piece.</div>}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ flexGrow: 1 }}>Material</span>
+                    <div className="seg seg-sm" role="radiogroup" aria-label="Material" style={{ flex: "none" }}
+                      title={perPlate > 1 ? "Wood is set up for one to a plate" : undefined}>
+                      {(["pla", "wood"] as const).map((m) => (
+                        <button key={m} role="radio" aria-checked={material === m} disabled={perPlate > 1 && m === "wood"}
+                          onClick={() => setMaterialPick(m)} style={{ padding: "0 10px" }}>{m === "pla" ? "PLA" : "Wood"}</button>
+                      ))}
+                    </div>
+                  </div>
+                  {wood && <div className="faint" style={{ fontSize: 12 }}>
+                    Wood fill: 210 °C, slower walls and longer retraction, so it strings less.{materialPick && materialPick !== spoolMaterial ? "" : " The printer has this spool set as wood."}
+                  </div>}
                 </div>
               ) : <div className="muted">The printer reports no spools{status?.online ? "" : " (offline)"}.</div>}
             </Section>
@@ -486,7 +505,7 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
             <h2 id="bed-clear">Is the bed clear?</h2>
             <div className="muted">
               {count > 1 ? `${count} × ` : ""}{title(model.id)} in {colorsText}{perPlate > 1 ? `, ${perPlate} to a plate` : ""}{copies > 1 ? `, ${copies} plates` : ""}.
-              The first copy starts as soon as it's sent{job?.stale ? " (it slices first)" : ""}.
+              The first copy starts as soon as it's sent{stale ? " (it slices first)" : ""}.
               {copies > 1 ? ` You'll confirm a clear bed before each later ${fit > 1 ? "plate" : "copy"}.` : ""}
             </div>
             <div className="grid2">

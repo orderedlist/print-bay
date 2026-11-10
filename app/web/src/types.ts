@@ -1,6 +1,8 @@
 // Mirrors of the server's API shapes (app/server/src). Keep in sync by hand.
 
-export interface Slot { slot: string; tool: number; color: string; remain: number }
+/** What a spool is made of, as far as slicing cares (the printer's setting for the slot). */
+export type Material = "pla" | "wood";
+export interface Slot { slot: string; tool: number; color: string; remain: number; material: Material }
 
 export interface PrinterStatus {
   online: boolean;
@@ -31,6 +33,7 @@ export interface ModelJob {
   stale: boolean;
   slicing: boolean;
   plates: { perPlate: number; stats: Stats | null; stale: boolean }[]; // slices with several on one plate
+  wood: { stats: Stats | null; stale: boolean }; // sliced for a wood-fill spool
 }
 
 export interface Model { id: string; file: string | null; kind: string | null; meshKey: string; source: string; jobs: ModelJob[] }
@@ -38,7 +41,7 @@ export interface Model { id: string; file: string | null; kind: string | null; m
 export interface ScadParam { name: string; default: string; value: string; comment: string }
 
 export interface QueueEntry {
-  id: string; job: string; color: string; hex: string; hexes?: string[]; slot: string; perPlate?: number; filename: string; copy: number; of: number;
+  id: string; job: string; color: string; hex: string; hexes?: string[]; slot: string; material?: Material; perPlate?: number; filename: string; copy: number; of: number;
 }
 export interface QueueState { active: QueueEntry | null; entries: QueueEntry[] }
 

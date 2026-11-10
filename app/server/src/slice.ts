@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { PYTHON, ROOT } from "./config.js";
 import { publish } from "./events.js";
-import { getJob } from "./jobs.js";
+import { getJob, type Material } from "./jobs.js";
 
 const running = new Map<string, Promise<void>>();
 
@@ -10,15 +10,16 @@ export function isSlicing(job: string) {
   return [...running.keys()].some((k) => k === job || k.startsWith(`${job}@`));
 }
 
-/** `perPlate` > 1 slices that many laid out on one plate (OpenSCAD jobs). */
-export function slice(jobName: string, perPlate = 1): Promise<void> {
+/** `perPlate` > 1 slices that many laid out on one plate (OpenSCAD jobs); `material`, for that spool instead of PLA. */
+export function slice(jobName: string, perPlate = 1, material: Material = "pla"): Promise<void> {
   const job = getJob(jobName);
-  const key = perPlate > 1 ? `${job.name}@${perPlate}` : job.name;
+  const key = `${job.name}${perPlate > 1 ? `@${perPlate}` : ""}${material === "pla" ? "" : `@${material}`}`;
   if (running.has(key)) return running.get(key)!;
 
   const work = new Promise<void>((resolve, reject) => {
-    publish("slice", { job: job.name, state: "running", line: `Slicing ${job.file}…` });
-    const child = spawn(PYTHON, ["-u", "scripts/run.py", job.file, "--slice-only", ...(perPlate > 1 ? ["--per-plate", String(perPlate)] : [])], { cwd: ROOT });
+    publish("slice", { job: job.name, state: "running", line: `Slicing ${job.file}${material === "pla" ? "" : ` for ${material}`}…` });
+    const child = spawn(PYTHON, ["-u", "scripts/run.py", job.file, "--slice-only",
+      ...(perPlate > 1 ? ["--per-plate", String(perPlate)] : []), ...(material === "pla" ? [] : ["--material", material])], { cwd: ROOT });
     let tail = "";
     const onData = (chunk: Buffer) => {
       for (const line of chunk.toString().split("\n").filter(Boolean)) {

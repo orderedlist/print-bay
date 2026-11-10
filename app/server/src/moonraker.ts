@@ -2,12 +2,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { MOONRAKER } from "./config.js";
+import type { Material } from "./jobs.js";
+
+/** Creality filament ids (Orca's filament_id; the CFS reports them as material_type) that aren't plain PLA. */
+const MATERIAL_IDS: Record<string, Material> = { "17001": "wood" }; // CR-Wood
 
 export interface Slot {
   slot: string;   // T1A..T4D
   tool: number;   // G-code tool index: T1A = 0 ... T4D = 15
   color: string;  // #RRGGBB
   remain: number; // percent
+  material: Material; // as set for the slot on the printer
 }
 
 export interface PrinterStatus {
@@ -46,6 +51,7 @@ function slotsFrom(box: any): Slot[] {
         tool: (unit - 1) * 4 + i,
         color: "#" + color.slice(-6).toUpperCase(),
         remain: Number(u.remain_len?.[i] ?? 0),
+        material: MATERIAL_IDS[String(u.material_type?.[i] ?? "").slice(-5)] ?? "pla",
       });
     });
   }

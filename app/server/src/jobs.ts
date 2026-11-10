@@ -36,6 +36,14 @@ export interface Rates { filament_per_kg: number; printer_watts: number; power_p
 export interface Cost { filament: number; power: number; total: number }
 export interface Stats { time: string; seconds: number; grams: number; cost: Cost; slicedAt: number }
 
+/**
+ * What a spool is made of, as far as slicing cares: plain PLA uses the job's own filament
+ * profile; the others swap in their own (see MATERIALS in scripts/run.py).
+ */
+export type Material = "pla" | "wood";
+export const MATERIAL_PROFILES: Record<Exclude<Material, "pla">, string> = { wood: "profiles/k2-wood.json" };
+export const isMaterial = (m: unknown): m is Material => m === "pla" || (typeof m === "string" && m in MATERIAL_PROFILES);
+
 export interface ModelJob {
   name: string;
   file: string;
@@ -46,6 +54,7 @@ export interface ModelJob {
   stats: Stats | null;
   stale: boolean; // model, job or profiles changed since the last slice
   plates: { perPlate: number; stats: Stats | null; stale: boolean }[]; // sliced with several to a plate
+  wood: { stats: Stats | null; stale: boolean }; // sliced for a wood-fill spool
 }
 
 export interface Model {
@@ -103,11 +112,15 @@ export function cost(grams: number, secs: number, r = rates()): Cost {
   return { filament: round(filament), power: round(power), total: round(filament + power) };
 }
 
-/** gcode/<job>.gcode, or gcode/<job>-x<n>.gcode for n laid out on one plate (see scripts/run.py). */
-export const gcodePath = (job: string, perPlate = 1) => abs(`gcode/${perPlate > 1 ? `${job}-x${perPlate}` : job}.gcode`);
+/**
+ * gcode/<job>.gcode, gcode/<job>-x<n>.gcode for n laid out on one plate, then -<material>
+ * for a spool that isn't PLA (see scripts/run.py).
+ */
+export const gcodePath = (job: string, perPlate = 1, material: Material = "pla") =>
+  abs(`gcode/${perPlate > 1 ? `${job}-x${perPlate}` : job}${material === "pla" ? "" : `-${material}`}.gcode`);
 
-export function gcodeStats(job: string, r = rates(), perPlate = 1): Stats | null {
-  const file = gcodePath(job, perPlate);
+export function gcodeStats(job: string, r = rates(), perPlate = 1, material: Material = "pla"): Stats | null {
+  const file = gcodePath(job, perPlate, material);
   if (!fs.existsSync(file)) return null;
   const size = fs.statSync(file).size;
   const fd = fs.openSync(file, "r");
@@ -124,10 +137,11 @@ export function gcodeStats(job: string, r = rates(), perPlate = 1): Stats | null
 }
 
 /** Anything the slice depends on that changed after it. */
-export function isStale(job: Job, perPlate = 1): boolean {
-  const sliced = mtime(gcodePath(job.name, perPlate));
+export function isStale(job: Job, perPlate = 1, material: Material = "pla"): boolean {
+  const sliced = mtime(gcodePath(job.name, perPlate, material));
   if (!sliced) return true;
-  const inputs = [job.model, job.file, ...Object.values(job.profiles)].map((p) => mtime(abs(p)));
+  const profiles = { ...job.profiles, ...(material === "pla" ? {} : { filament: MATERIAL_PROFILES[material] }) };
+  const inputs = [job.model, job.file, ...Object.values(profiles)].map((p) => mtime(abs(p)));
   return inputs.some((t) => t > sliced);
 }
 
@@ -174,6 +188,7 @@ export function listModels(): Model[] {
             .map((f) => f.match(new RegExp(`^${j.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-x(\\d+)\\.gcode$`))?.[1])
             .filter((n): n is string => !!n).map(Number).sort((a, b) => a - b)
             .map((n) => ({ perPlate: n, stats: gcodeStats(j.name, r, n), stale: isStale(j, n) })),
+          wood: { stats: gcodeStats(j.name, r, 1, "wood"), stale: isStale(j, 1, "wood") },
         })),
       };
     });
