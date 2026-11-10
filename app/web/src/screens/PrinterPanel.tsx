@@ -103,14 +103,14 @@ export function PrinterPanel({ live, models, toast, openModel }: Props) {
       </div>
 
       <div className="sec">
-        <div className="sech">Filament · CFS</div>
+        <div className="sech">Filament</div>
         <div className="sec-body" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {status?.slots.length ? status.slots.map((s) => (
             <div key={s.slot} style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span className="dot" style={{ width: 14, height: 14, background: s.color, boxShadow: "0 0 0 1px var(--line) inset" }} />
               <span style={{ flexGrow: 1 }}>{colorName(s.color)}</span>
-              <span className="mono faint">{s.slot}</span>
-              <span className="mono muted" style={{ width: 40, textAlign: "right" }}>{s.remain}%</span>
+              <span className="mono faint">{s.slot === "EXT" ? "Outside" : s.slot}</span>
+              <span className="mono muted" style={{ width: 40, textAlign: "right" }}>{s.remain === null ? "—" : `${s.remain}%`}</span>
             </div>
           )) : <div className="muted">No spools reported.</div>}
         </div>

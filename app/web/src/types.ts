@@ -2,7 +2,9 @@
 
 /** What a spool is made of, as far as slicing cares (the printer's setting for the slot). */
 export type Material = "pla" | "wood";
-export interface Slot { slot: string; tool: number; color: string; remain: number; material: Material }
+/** A spool the printer reports: a CFS slot (T1A..T4D), or "EXT", the holder outside it (remain unknown). */
+export interface Slot { slot: string; tool: number; color: string; remain: number | null; material: Material }
+export const slotName = (slot: string) => (slot === "EXT" ? "outside spool" : slot);
 
 export interface PrinterStatus {
   online: boolean;

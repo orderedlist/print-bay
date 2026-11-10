@@ -7,7 +7,7 @@ import { ModelViewer, SEVERITY_COLORS, type ViewAvailability, type ViewMode } fr
 import { Params } from "../components/Params";
 import { ICONS, Toolbar, type Action } from "../components/Toolbar";
 import type { Theme } from "../theme";
-import { IDLE_STATES, type AgentSession, type CheckReport, type Material, type Model, type ScadParam } from "../types";
+import { IDLE_STATES, type AgentSession, type CheckReport, type Material, type Model, type ScadParam, slotName } from "../types";
 import { plateFit } from "../plate";
 import { stateLabel } from "./PrinterPanel";
 
@@ -182,6 +182,7 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   const chosenAll = colorways.map((c) => chosenFor(c.key));
   const chosen = chosenAll.every(Boolean) ? chosenAll[0] : undefined;
   // wood fill slices with its own filament profile (cooler, slower, more retraction); one copy to a plate only
+  const outside = chosenAll.some((s) => s?.slot === "EXT");
   const spoolMaterial: Material = chosenAll.some((s) => s?.material === "wood") ? "wood" : "pla";
   const material: Material = perPlate > 1 ? "pla" : materialPick ?? spoolMaterial;
   const wood = material === "wood";
@@ -215,8 +216,9 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
     try {
       const r = await api<{ started: boolean; queued: number }>("/api/print", {
         method: "POST", json: multi
-          ? { job: job.name, colors: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.color])), copies, perPlate, material, startNow }
-          : { job: job.name, color: chosen.color, copies, perPlate, material, startNow },
+          ? { job: job.name, colors: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.color])),
+            slots: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.slot])), copies, perPlate, material, startNow }
+          : { job: job.name, color: chosen.color, slot: chosen.slot, copies, perPlate, material, startNow },
       });
       const what = `${title(model.id)}${job.label ? ` (${job.label})` : ""} in ${colorsText}`;
       toast(r.started
@@ -341,20 +343,24 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
                       <div key={c.key} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                         {multi && <div style={{ display: "flex", justifyContent: "space-between" }}>
                           <span style={{ fontWeight: 500 }}>{c.label.replace(/^./, (x) => x.toUpperCase())}</span>
-                          <span className="muted">{pick ? `${colorName(pick.color)} · ${pick.slot}` : ""}</span>
+                          <span className="muted">{pick ? `${colorName(pick.color)} · ${slotName(pick.slot)}` : ""}</span>
                         </div>}
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }} role="radiogroup" aria-label={multi ? `Filament for ${c.label}` : "Filament"}>
                           {slots.map((s) => (
                             <button key={s.slot} className="sw" role="radio" aria-checked={s.slot === picked[c.key]} style={{ background: s.color }}
                               onClick={() => setPicked((p) => ({ ...p, [c.key]: s.slot }))}
-                              aria-label={`${colorName(s.color)} in ${s.slot}, ${s.remain}% left`} title={`${colorName(s.color)} · ${s.slot} · ${s.remain}%`} />
+                              aria-label={`${colorName(s.color)} in ${slotName(s.slot)}${s.remain === null ? "" : `, ${s.remain}% left`}`}
+                              title={`${colorName(s.color)} · ${slotName(s.slot)}${s.remain === null ? "" : ` · ${s.remain}%`}`} />
                           ))}
-                          {!multi && <span className="muted" style={{ marginLeft: "auto" }}>{pick ? `${colorName(pick.color)} · ${pick.slot}` : ""}</span>}
+                          {!multi && <span className="muted" style={{ marginLeft: "auto" }}>{pick ? `${colorName(pick.color)} · ${slotName(pick.slot)}` : ""}</span>}
                         </div>
                       </div>
                     );
                   })}
                   {multi && <div className="faint" style={{ fontSize: 12 }}>One print: the CFS swaps colour within each layer, so it comes off the bed as one piece.</div>}
+                  {outside && <div className="faint" style={{ fontSize: 12 }}>
+                    {multi ? "The outside spool can only feed a one-colour print." : "It prints whatever is loaded in the toolhead: load the outside spool on the printer's screen first (unloading the CFS)."}
+                  </div>}
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <span style={{ flexGrow: 1 }}>Material</span>
                     <div className="seg seg-sm" role="radiogroup" aria-label="Material" style={{ flex: "none" }}

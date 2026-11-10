@@ -60,14 +60,23 @@ export function findSlot(color: string, slots: moonraker.Slot[]): moonraker.Slot
   return best;
 }
 
-/** Copy of the G-code whose filament i (T<i>) pulls from slots[i] in the CFS. */
+/**
+ * Copy of the G-code whose filament i (T<i>) pulls from slots[i] in the CFS. The outside
+ * spool has no tool number: its copy drops the tool changes, so the printer feeds whatever
+ * is loaded (the same plain start Creality Print and Orca use for the spool holder).
+ */
 function forSlots(gcode: string, slots: moonraker.Slot[]): string {
   const text = fs.readFileSync(gcode, "utf8");
   const tools = [...text.matchAll(/^T(\d+)\s*$/gm)].map((m) => Number(m[1]));
   if (Math.max(0, ...tools) >= slots.length)
     throw fail(`${path.basename(gcode)} uses ${Math.max(...tools) + 1} filaments but ${slots.length} colour(s) were picked; re-slice it`);
+  const outside = slots.some((s) => s.slot === moonraker.OUTSIDE);
+  if (outside && (slots.length > 1 || new Set(tools).size > 1))
+    throw fail("The outside spool can only feed a one-colour print; pick CFS spools for this one");
   const out = gcode.replace(/\.gcode$/, `-${slots.map((s) => s.slot).join("-")}.gcode`);
-  fs.writeFileSync(out, text.replace(/^T(\d+)\s*$/gm, (_, i) => `T${slots[Number(i)].tool}`));
+  fs.writeFileSync(out, outside
+    ? text.replace(/^T\d+\s*\n/gm, "")
+    : text.replace(/^T(\d+)\s*$/gm, (_, i) => `T${slots[Number(i)].tool}`));
   return out;
 }
 
@@ -81,7 +90,11 @@ async function startEntry(entry: QueueEntry) {
  * multi-colour job its spool (by part name), defaulting to the job's own colours.
  * `material` slices for that filament; left out, it's wood if a picked spool is set as wood on the printer.
  */
-export async function print(opts: { job: string; color?: string; colors?: Record<string, string>; copies: number; perPlate?: number; material?: string; startNow: boolean }) {
+export async function print(opts: {
+  job: string; color?: string; colors?: Record<string, string>;
+  slot?: string; slots?: Record<string, string>; // the spools picked (T1A, EXT): exact where two hold the same colour
+  copies: number; perPlate?: number; material?: string; startNow: boolean;
+}) {
   const job = getJob(opts.job);
   const copies = Math.max(1, Math.min(20, Math.floor(opts.copies))); // plates, one after another
   const perPlate = Math.max(1, Math.min(400, Math.floor(opts.perPlate ?? 1)));
@@ -89,7 +102,14 @@ export async function print(opts: { job: string; color?: string; colors?: Record
   if (!status.online) throw fail("Can't reach the printer", 503);
   const colors = job.parts.length ? job.parts.map((p) => opts.colors?.[p.name] ?? p.color) : [opts.color ?? job.color ?? ""];
   if (!colors.every(Boolean)) throw fail("Pick a colour");
-  const slots = colors.map((c) => findSlot(c, status.slots));
+  const keys = job.parts.length ? job.parts.map((p) => p.name) : [""];
+  const slots = colors.map((c, i) => {
+    const picked = job.parts.length ? opts.slots?.[keys[i]] : opts.slot;
+    if (!picked) return findSlot(c, status.slots);
+    const s = status.slots.find((x) => x.slot === picked);
+    if (!s) throw fail(`The printer reports nothing in ${picked}`, 409);
+    return s;
+  });
   const slot = slots[0];
   if (opts.material !== undefined && !isMaterial(opts.material)) throw fail(`Unknown material "${opts.material}"`);
   const material: Material = opts.material ?? (slots.some((s) => s.material === "wood") ? "wood" : "pla");
