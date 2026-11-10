@@ -40,6 +40,11 @@ Orca stores them as JSON in
 `~/Library/Application Support/OrcaSlicer/user/default/{machine,process,filament}/`.
 Copy them into `profiles/` with the names the job file uses.
 
+`profiles/k2-machine.json` purges 5 mm in from the bed's left and front
+edges; Orca's stock K2 start G-code purges right on them, where the nozzle
+snagged and the motors stalled. Keep that edit if you rebuild it with
+`setup.py --force`.
+
 Wood-fill spools (CR-Wood) slice with `profiles/k2-wood.json` in place of the
 job's filament profile: Orca's "CR-Wood @K2 Plus-all" at 210 °C (215 °C first
 layer), 10 mm³/s (walls slow to about 110 mm/s) and 1 mm retraction, so it
