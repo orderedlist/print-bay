@@ -12,6 +12,7 @@ import * as moonraker from "./moonraker.js";
 import { slice } from "./slice.js";
 
 const MAX_COLOR_DISTANCE = 120;
+const SAME_COLOR = 20; // closer than this, two spools are the same colour and a colour alone can't pick between them
 
 export interface QueueEntry {
   id: string;
@@ -57,6 +58,9 @@ export function findSlot(color: string, slots: moonraker.Slot[]): moonraker.Slot
   const best = slots.reduce((a, b) => (distance(b) < distance(a) ? b : a));
   if (distance(best) > MAX_COLOR_DISTANCE)
     throw fail(`No ${color} loaded (have ${slots.map((s) => `${s.slot} ${s.color}`).join(", ")})`, 409);
+  const ties = slots.filter((s) => distance(s) - distance(best) < SAME_COLOR);
+  if (ties.length > 1) // e.g. T1A and the outside spool both black: guessing could swap away from what's loaded
+    throw fail(`${ties.map((s) => (s.slot === moonraker.OUTSIDE ? "the outside spool" : s.slot)).join(" and ")} are the same colour; pick the spool to print from`, 409);
   return best;
 }
 

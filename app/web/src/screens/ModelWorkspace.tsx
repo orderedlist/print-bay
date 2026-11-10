@@ -176,7 +176,7 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   useEffect(() => { // default to the spool nearest the job's color, once the printer reports them
     const missing = colorways.filter((c) => !picked[c.key]);
     if (missing.length && slots.length)
-      setPicked((p) => ({ ...p, ...Object.fromEntries(missing.map((c) => [c.key, nearest(c.hex, slots)!])) }));
+      setPicked((p) => ({ ...p, ...Object.fromEntries(missing.map((c) => [c.key, nearest(c.hex, slots)]).filter(([, s]) => s)) }));
   }, [slots, job?.name, job?.hex, job?.parts.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const chosenFor = (key: string) => slots.find((s) => s.slot === picked[key]);
   const chosenAll = colorways.map((c) => chosenFor(c.key));
@@ -354,6 +354,12 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
                           ))}
                           {!multi && <span className="muted" style={{ marginLeft: "auto" }}>{pick ? `${colorName(pick.color)} · ${slotName(pick.slot)}` : ""}</span>}
                         </div>
+                        {!pick && (() => {
+                          const near = nearestSpools(c.hex, slots);
+                          return near.length > 1 && <div style={{ fontSize: 12, color: "var(--warn)" }}>
+                            {near.map((s) => (s.slot === "EXT" ? "the outside spool" : s.slot)).join(" and ")} are {near.length === 2 ? "both" : "all"} {colorName(near[0].color).toLowerCase()}: pick the one to print from.
+                          </div>;
+                        })()}
                       </div>
                     );
                   })}
@@ -546,12 +552,24 @@ function useUnits(): ["mm" | "in", (u: "mm" | "in") => void] {
   return [units, (u) => { set(u); try { localStorage.setItem("printbay.units", u); } catch { /* not remembered */ } }];
 }
 
-function nearest(hex: string | null, slots: { slot: string; color: string }[]) {
-  if (!hex || !slots.length) return slots[0]?.slot ?? null;
+/** RGB distance under which two spools count as the same colour (both black, say). */
+const SAME_COLOR = 20;
+
+/** The spools nearest `hex`: one, or several when they're the same colour (T1A and the outside spool both black). */
+function nearestSpools<S extends { slot: string; color: string }>(hex: string | null, slots: S[]): S[] {
+  if (!slots.length) return [];
+  if (!hex) return [slots[0]];
   const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
   const target = rgb(hex);
   const d = (s: { color: string }) => Math.hypot(...rgb(s.color).map((c, i) => c - target[i]));
-  return slots.reduce((best, s) => (d(s) < d(best) ? s : best)).slot;
+  const best = Math.min(...slots.map(d));
+  return slots.filter((s) => d(s) - best < SAME_COLOR);
+}
+
+/** The spool to start on: the nearest, unless two match equally (then you pick, rather than a guess feeding the wrong one). */
+function nearest(hex: string | null, slots: { slot: string; color: string }[]): string | null {
+  const near = nearestSpools(hex, slots);
+  return near.length === 1 ? near[0].slot : null;
 }
 
 /**
