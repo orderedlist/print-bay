@@ -150,6 +150,48 @@ function joinParts(files: string[], dest: string) {
 const inflight = new Map<string, Promise<string>>();
 
 /**
+ * A plate's parts, each as many times as it asks, in rows across the bed (the slice
+ * shows where Orca really puts them). Rebuilt when the plate or a part's mesh changes.
+ */
+async function plateMesh(modelId: string, name: string, plate: { job: string; count: number }[], print: boolean): Promise<string> {
+  const parts = await Promise.all(plate.filter((p) => p.count > 0).map(async (p) => ({ ...p, file: await meshFor(modelId, { print, job: p.job }) })));
+  const dest = path.join(CACHE, `${modelId}.${name}${print ? ".print" : ""}.stl`);
+  const stamp = dest + ".key";
+  const key = JSON.stringify(parts.map((p) => [p.job, p.count, fs.statSync(p.file).mtimeMs]));
+  if (fs.existsSync(dest) && fs.existsSync(stamp) && fs.readFileSync(stamp, "utf8") === key) return dest;
+  const BED = 260, GAP = 10;
+  const tris: Buffer[] = [];
+  let x = 0, y = 0, row = 0;
+  for (const p of parts) {
+    const own = readBinaryStl(p.file);
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (const t of own) for (let v = 0; v < 3; v++) for (let c = 0; c < 3; c++) {
+      const n = t.readFloatLE(12 + v * 12 + c * 4);
+      lo[c] = Math.min(lo[c], n); hi[c] = Math.max(hi[c], n);
+    }
+    const [w, d] = [hi[0] - lo[0], hi[1] - lo[1]];
+    for (let i = 0; i < p.count; i++) {
+      if (x > 0 && x + w > BED) { x = 0; y += row + GAP; row = 0; }
+      const shift = [x - lo[0], y - lo[1], -lo[2]];
+      for (const t of own) {
+        const copy = Buffer.from(t);
+        for (let v = 0; v < 3; v++) for (let c = 0; c < 3; c++) {
+          const o = 12 + v * 12 + c * 4;
+          copy.writeFloatLE(copy.readFloatLE(o) + shift[c], o);
+        }
+        tris.push(copy);
+      }
+      x += w + GAP; row = Math.max(row, d);
+    }
+  }
+  const head = Buffer.alloc(84);
+  head.writeUInt32LE(tris.length, 80);
+  fs.writeFileSync(dest, Buffer.concat([head, ...tris]));
+  fs.writeFileSync(stamp, key);
+  return dest;
+}
+
+/**
  * Path to an STL of the model with its job's overrides (`job`, or the model's first). OpenSCAD
  * models render upright (as used) for viewing, or laid out as sliced with `print: true`.
  */
@@ -157,6 +199,7 @@ export function meshFor(modelId: string, opts: { print?: boolean; job?: string }
   const model = getModel(modelId);
   const jobName = opts.job && model.jobs.some((j) => j.name === opts.job) ? opts.job : model.jobs[0]?.name;
   const job = jobName ? getJob(jobName) : null;
+  if (job?.plate) return plateMesh(modelId, job.name, job.plate, Boolean(opts.print));
   const file = job?.model ?? model.file; // a model's jobs can each have their own file (a 3MF per print profile)
   if (!file) throw Object.assign(new Error(`${modelId} has no mesh`), { statusCode: 404 });
   const src = path.join(ROOT, file);

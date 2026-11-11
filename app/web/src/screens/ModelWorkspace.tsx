@@ -83,6 +83,29 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   useEffect(() => setJobName(null), [model.id]);
   const job = model.jobs.find((j) => j.name === jobName) ?? model.jobs[0];
   const partGroups = pickerGroups(model.jobs);
+  // ---- plates: several parts printed at once ----
+  const plateParts = model.jobs.filter((j) => !j.plate && j.label); // what can go on a plate
+  const [plateBusy, setPlateBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  useEffect(() => setConfirmDelete(false), [jobName]);
+  const plateCall = async (fn: () => Promise<unknown>) => {
+    setPlateBusy(true);
+    try { await fn(); } catch (e) { toast((e as Error).message, true); }
+    setPlateBusy(false);
+  };
+  const newPlate = () => plateCall(async () => {
+    const start = job && !job.plate && job.label ? job : plateParts[0];
+    const r = await api<{ name: string }>(`/api/models/${model.id}/plates`, { method: "POST", json: { counts: { [start.name]: 1 } } });
+    setJobName(r.name);
+    setTab("print");
+  });
+  const setOnPlate = (part: string, n: number) => job?.plate && plateCall(() => api(`/api/plates/${job.name}`, {
+    method: "PUT", json: { counts: { ...Object.fromEntries(job.plate!.map((p) => [p.job, p.count])), [part]: n } },
+  }));
+  const deletePlate = () => job?.plate && plateCall(async () => {
+    await api(`/api/plates/${job.name}`, { method: "DELETE" });
+    setJobName(null);
+  });
   const drawn = !!model.file; // a model Claude is still creating has only its folder
   const parametric = model.kind === "scad" || model.kind === "py"; // OpenSCAD, or a nurb part
   const canEdit = parametric || !drawn;
@@ -312,6 +335,10 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
                   </div>
                 </div>
               ))}
+              {plateParts.length > 1 && (
+                <button className="cta cta-sm" style={{ justifySelf: "start", height: 28 }} disabled={plateBusy} onClick={newPlate}
+                  title="Print several parts at once, laid out on one bed">+ New plate</button>
+              )}
             </div>
           )}
         </div>
@@ -333,6 +360,38 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
                 ))}
               </div>
             </Section>
+
+            {job?.plate && (
+              <Section label={`On ${job.label ?? "this plate"}`}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {plateParts.map((p) => {
+                    const n = job.plate!.find((x) => x.job === p.name)?.count ?? 0;
+                    const total = job.plate!.reduce((t, x) => t + x.count, 0);
+                    return (
+                      <div key={p.name} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {p.hex && <span className="dot" style={{ width: 10, height: 10, background: p.hex }} />}
+                        <span style={{ flexGrow: 1, color: n ? undefined : "var(--muted)" }}>{p.label}</span>
+                        <div className="step mono" role="group" aria-label={`${p.label} on the plate`}>
+                          <button onClick={() => setOnPlate(p.name, n - 1)} disabled={plateBusy || n <= 0 || total <= 1} aria-label={`One fewer ${p.label}`}>−</button>
+                          <b>{n}</b>
+                          <button onClick={() => setOnPlate(p.name, n + 1)} disabled={plateBusy || n >= 20} aria-label={`One more ${p.label}`}>+</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div className="faint" style={{ fontSize: 12 }}>
+                    Each part keeps its own settings; Orca lays them out when it slices. Check the toolpaths view to see where they land.
+                  </div>
+                  {multi && <div style={{ fontSize: 12, color: "var(--warn)" }}>
+                    {colorways.length} colours on one plate swap spools every layer, which can take several times longer than a plate per colour.
+                  </div>}
+                  <button className="cta cta-sm danger" style={{ alignSelf: "flex-start", height: 28 }} disabled={plateBusy}
+                    onClick={() => (confirmDelete ? deletePlate() : setConfirmDelete(true))}>
+                    {confirmDelete ? `Delete ${job.label ?? "plate"}?` : "Delete plate"}
+                  </button>
+                </div>
+              </Section>
+            )}
 
             <Section label={multi ? `Filament · ${colorways.length} colours` : "Filament"}>
               {slots.length ? (
@@ -363,7 +422,9 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
                       </div>
                     );
                   })}
-                  {multi && <div className="faint" style={{ fontSize: 12 }}>One print: the CFS swaps colour within each layer, so it comes off the bed as one piece.</div>}
+                  {multi && <div className="faint" style={{ fontSize: 12 }}>{job?.plate
+                    ? "One print: the CFS swaps colour each layer, between the parts."
+                    : "One print: the CFS swaps colour within each layer, so it comes off the bed as one piece."}</div>}
                   {outside && <div className="faint" style={{ fontSize: 12 }}>
                     {multi ? "The outside spool can only feed a one-colour print." : "It prints whatever is loaded in the toolhead: load the outside spool on the printer's screen first (unloading the CFS)."}
                   </div>}
@@ -585,5 +646,6 @@ function pickerGroups(jobs: Model["jobs"]): { name: string; jobs: { job: Model["
     const [name, short] = m ? [m[1], m[2]] : [job.label!, job.label!];
     groups.set(name, [...(groups.get(name) ?? []), { job, short }]);
   }
-  return [...groups].map(([name, js]) => ({ name, jobs: js }));
+  return [...groups].map(([name, js]) => ({ name, jobs: js }))
+    .sort((a, b) => Number(!!a.jobs[0].job.plate) - Number(!!b.jobs[0].job.plate)); // plates after the parts they hold
 }

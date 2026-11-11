@@ -29,6 +29,8 @@ export interface Job {
   label?: string;
   /** A solid disc added under the object when slicing, filling a logo pressed into its base (see scripts/run.py). */
   fillBase?: { radius: number; height: number };
+  /** A plate (plates/<name>.toml): other jobs' parts printed together, each this many times. */
+  plate?: { job: string; count: number }[];
 }
 
 export const hexFor = (color: string) => COLORS[color.toLowerCase()] ?? (color.startsWith("#") ? color : `#${color}`);
@@ -55,6 +57,7 @@ export interface ModelJob {
   stats: Stats | null;
   stale: boolean; // model, job or profiles changed since the last slice
   plates: { perPlate: number; stats: Stats | null; stale: boolean }[]; // sliced with several to a plate
+  plate: { job: string; count: number }[] | null; // a plate of the model's parts: what's on it
   wood: { stats: Stats | null; stale: boolean }; // sliced for a wood-fill spool
 }
 
@@ -71,6 +74,11 @@ const abs = (rel: string) => path.join(ROOT, rel);
 const mtime = (file: string) => (fs.existsSync(file) ? fs.statSync(file).mtimeMs : 0);
 
 export function listJobs(): Job[] {
+  const jobs = readJobs();
+  return [...jobs, ...readPlates(jobs)];
+}
+
+function readJobs(): Job[] {
   const dir = abs("jobs");
   return fs.readdirSync(dir).filter((f) => f.endsWith(".toml")).sort().map((f) => {
     const data = parse(fs.readFileSync(path.join(dir, f), "utf8")) as any;
@@ -89,6 +97,43 @@ export function listJobs(): Job[] {
       fillBase: data.fill_base ? { radius: Number(data.fill_base.radius), height: Number(data.fill_base.height) } : undefined,
     };
   });
+}
+
+/**
+ * Plates (plates/*.toml, see scripts/run.py): a job made of other jobs' parts. It takes the
+ * first part's model and profiles; one colour prints as that colour, several as parts named
+ * by what uses each (filament 1, 2, ... in the order they first appear, as run.py assigns them).
+ */
+function readPlates(jobs: Job[]): Job[] {
+  const dir = abs("plates");
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((f) => f.endsWith(".toml")).sort().flatMap((f): Job[] => {
+    const data = parse(fs.readFileSync(path.join(dir, f), "utf8")) as any;
+    const plate = Object.entries(data.plate ?? {}).map(([job, count]) => ({ job, count: Number(count) }));
+    const members = plate.filter((p) => p.count > 0).map((p) => ({ ...p, of: jobs.find((j) => j.name === p.job) }));
+    const first = members.find((m) => m.of)?.of;
+    if (!first) return []; // its parts are gone
+    const colors = new Map<string, string[]>();
+    for (const m of members) if (m.of) {
+      const hex = hexFor(m.of.color ?? "");
+      colors.set(hex, [...(colors.get(hex) ?? []), m.of.label ?? m.of.name]);
+    }
+    return [{
+      name: data.name, file: `plates/${f}`, model: first.model, copies: 1, profiles: first.profiles, scad: {},
+      label: data.label, plate,
+      ...(colors.size > 1
+        ? { parts: [...colors].map(([color, names]) => ({ name: names.join(", "), color })) }
+        : { parts: [], color: [...colors.keys()][0] }),
+    }];
+  });
+}
+
+/** Write a plate's contents (job name -> count), creating plates/<name>.toml if it's new. */
+export function writePlate(name: string, label: string, counts: Record<string, number>) {
+  fs.mkdirSync(abs("plates"), { recursive: true });
+  const lines = Object.entries(counts).filter(([, n]) => n > 0).map(([job, n]) => `${job} = ${n}`);
+  fs.writeFileSync(abs(`plates/${name}.toml`),
+    `# A plate of parts, made in Print Bay (see "A plate" in scripts/run.py).\nname  = ${JSON.stringify(name)}\nlabel = ${JSON.stringify(label)}\n\n[plate]\n${lines.join("\n")}\n`);
 }
 
 export function getJob(name: string): Job {
@@ -144,7 +189,9 @@ export function isStale(job: Job, perPlate = 1, material: Material = "pla"): boo
   if (!sliced) return true;
   const profiles = { ...job.profiles, ...(material === "pla" ? {} : { filament: MATERIAL_PROFILES[material] }) };
   const nozzle = getNozzle();
-  const inputs = [job.model, job.file, ...Object.values(profiles), ...NOZZLE_PROFILES[nozzle]].map((p) => mtime(abs(p)));
+  const parts = (job.plate ?? []).map((p) => listJobs().find((j) => j.name === p.job)).filter((j): j is Job => !!j)
+    .flatMap((j) => [j.file, j.model]); // a plate: its parts' jobs and models too
+  const inputs = [job.model, job.file, ...parts, ...Object.values(profiles), ...NOZZLE_PROFILES[nozzle]].map((p) => mtime(abs(p)));
   return inputs.some((t) => t > sliced);
 }
 
@@ -192,6 +239,7 @@ export function listModels(): Model[] {
             .filter((n): n is string => !!n).map(Number).sort((a, b) => a - b)
             .map((n) => ({ perPlate: n, stats: gcodeStats(j.name, r, n), stale: isStale(j, n) })),
           wood: { stats: gcodeStats(j.name, r, 1, "wood"), stale: isStale(j, 1, "wood") },
+          plate: j.plate ?? null,
         })),
       };
     });

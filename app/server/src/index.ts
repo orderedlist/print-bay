@@ -6,7 +6,7 @@ import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import { CAMERA_URL, HOST, K2_HOST, PORT, ROOT, WEB_DIST } from "./config.js";
 import { bus, publish } from "./events.js";
-import { getJob, isMaterial, listModels, rates, scadParams, setScadParams } from "./jobs.js";
+import { getJob, getModel, isMaterial, listJobs, listModels, rates, scadParams, setScadParams, writePlate } from "./jobs.js";
 import { meshFor } from "./mesh.js";
 import { isNozzle, setNozzle, getNozzle } from "./nozzle.js";
 import { checkModel } from "./modelchecks.js";
@@ -91,8 +91,52 @@ export async function start(opts: StartOptions = {}) {
     const job = getJob(req.params.job);
     const material = req.body?.material ?? "pla";
     if (!isMaterial(material)) return reply.status(400).send({ error: `Unknown material "${material}"` });
+    if (job.plate && (req.body?.perPlate ?? 1) > 1) return reply.status(400).send({ error: "A plate is laid out already; print more of it as copies" });
     slice(job.name, Math.max(1, Math.floor(req.body?.perPlate ?? 1)), material).catch(() => {}); // progress and failure arrive over SSE
     return reply.status(202).send({ ok: true });
+  });
+
+  // ---- plates: several of a model's parts printed at once ----
+  /** Counts (job -> how many) checked against the model's parts: 3MF parts only, 0-20 of each, something on it. */
+  const plateCounts = (modelId: string, counts: Record<string, unknown> = {}) => {
+    const parts = getModel(modelId).jobs.filter((j) => !j.plate).map((j) => getJob(j.name)).filter((j) => j.object);
+    const out: Record<string, number> = {};
+    for (const [job, n] of Object.entries(counts)) {
+      if (!parts.some((p) => p.name === job)) throw Object.assign(new Error(`${job} isn't a part of ${modelId}`), { statusCode: 400 });
+      out[job] = Math.max(0, Math.min(20, Math.floor(Number(n) || 0)));
+    }
+    if (!Object.values(out).some((n) => n > 0)) throw Object.assign(new Error("Put at least one part on the plate"), { statusCode: 400 });
+    return out;
+  };
+  const plateOf = (name: string) => {
+    const job = getJob(name);
+    if (!job.plate) throw Object.assign(new Error(`${name} isn't a plate`), { statusCode: 400 });
+    return job;
+  };
+  const modelOf = (job: { model: string }) => job.model.split("/")[1];
+  app.post<{ Params: { id: string }; Body: { counts: Record<string, number> } }>("/api/models/:id/plates", async (req) => {
+    const counts = plateCounts(req.params.id, req.body?.counts);
+    const taken = new Set(listJobs().map((j) => j.name));
+    let n = 1;
+    while (taken.has(`${req.params.id}-plate-${n}`)) n++;
+    const name = `${req.params.id}-plate-${n}`;
+    writePlate(name, `Plate ${n}`, counts);
+    publish("models", null);
+    return { name };
+  });
+  app.put<{ Params: { name: string }; Body: { counts: Record<string, number> } }>("/api/plates/:name", async (req) => {
+    const job = plateOf(req.params.name);
+    writePlate(job.name, job.label ?? job.name, plateCounts(modelOf(job), req.body?.counts));
+    publish("models", null);
+    return { name: job.name };
+  });
+  app.delete<{ Params: { name: string } }>("/api/plates/:name", async (req) => {
+    const job = plateOf(req.params.name);
+    fs.rmSync(path.join(ROOT, job.file));
+    for (const f of fs.readdirSync(path.join(ROOT, "gcode"))) // its slices, for every material and nozzle
+      if (f.startsWith(`${job.name}.`) || f.startsWith(`${job.name}-`)) fs.rmSync(path.join(ROOT, "gcode", f), { recursive: true, force: true });
+    publish("models", null);
+    return { ok: true };
   });
 
   // ---- printing ----

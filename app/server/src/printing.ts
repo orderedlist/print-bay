@@ -118,6 +118,7 @@ export async function print(opts: {
   if (opts.material !== undefined && !isMaterial(opts.material)) throw fail(`Unknown material "${opts.material}"`);
   const material: Material = opts.material ?? (slots.some((s) => s.material === "wood") ? "wood" : "pla");
   if (material !== "pla" && perPlate > 1) throw fail(`Several to a plate isn't set up for ${material} yet`);
+  if (job.plate && perPlate > 1) throw fail("A plate is laid out already; print more of it as copies");
   if (opts.startNow && !moonraker.IDLE_STATES.has(status.state))
     throw fail(`The printer is ${status.state}; add it to the queue instead`, 409);
 

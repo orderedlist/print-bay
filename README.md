@@ -60,6 +60,14 @@ Layer heights stay the job's. It writes `gcode/<job>-0.6mm.gcode` (after any
 `-wood`). The printer doesn't report a nozzle swap, so in the app set it under
 Nozzle size in the printer panel; every slice and print follows it.
 
+A plate (`plates/<name>.toml`) prints several parts of a downloaded 3MF at once:
+Plant 3, Plant 6 and two funnels, say. On a multi-part model's page, **+ New
+plate** makes one and the plate panel sets how many of each part it holds.
+`run.py` copies each part's object (with its fill_base and modifiers) into one
+3MF, gives each object the process overrides it doesn't share with the others,
+and has Orca arrange them on the bed. Parts in different colours get a filament
+each, but swap spools every layer, so a plate per colour is usually much faster.
+
 ## Adding a model
 
 1. Make `models/<name>/`, drop in the file (.3mf, .stl, or .scad), add `SOURCE.md`.

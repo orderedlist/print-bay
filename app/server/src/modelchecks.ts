@@ -14,6 +14,8 @@ export async function checkModel(id: string, jobName?: string): Promise<CheckRep
   const { pos, part } = readStlParts(file);
   const src = job?.model ?? model.file;
   // a fill_base disc is its own shell in the mesh (the slicer unions it with the part)
-  const pieces = (src?.endsWith(".3mf") ? threemfPieces(path.join(ROOT, src), job?.object) : 1) + (job?.fillBase ? 1 : 0);
+  const pieces = job?.plate // a plate: each part, plus its fill_base disc
+    ? job.plate.reduce((n, p) => n + p.count * (getJob(p.job).fillBase ? 2 : 1), 0)
+    : (src?.endsWith(".3mf") ? threemfPieces(path.join(ROOT, src), job?.object) : 1) + (job?.fillBase ? 1 : 0);
   return { ...check(pos, { supports, part, pieces }), supports };
 }

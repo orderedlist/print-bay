@@ -29,6 +29,15 @@ name, on the plate the file puts it on. `fill_base = { radius = 25, height = 0.6
 also fills the bottom that far up within that radius of the object's middle,
 smoothing away a logo pressed into its base.
 
+A plate (plates/<name>.toml) prints several of those parts at once, each with
+its own settings and colour, laid out by Orca:
+
+  name  = "succulent-plate-1"
+  label = "Plate 1"
+  [plate]                       # job name = how many
+  succulent-plant-3 = 1
+  succulent-funnel  = 2
+
 Set ORCA to your OrcaSlicer binary if it isn't at the macOS default.
 """
 import os
@@ -40,6 +49,7 @@ import argparse
 import subprocess
 import json
 import tomllib
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -73,10 +83,52 @@ NOZZLES = {"0.6": {"machine": "profiles/k2-machine-0.6.json", "process": "profil
 def load_job(path):
     with open(path, "rb") as fh:
         job = tomllib.load(fh)
+    if "plate" in job:
+        plate_members(job, path)
     for key in ("name", "model", "profiles"):
         if key not in job:
             sys.exit(f"{path}: missing '{key}'")
     return job
+
+
+# Process settings Orca only takes for the whole plate, not per object: on for the plate if any part wants it.
+PLATE_WIDE = {"reduce_crossing_wall"}
+
+
+def plate_members(job, path):
+    """Fill in a plate's members ([(job, count)]), profiles and model from the jobs it holds.
+
+    Every part slices with the first's profiles; the process overrides all the parts
+    share go on the plate, and each part's others go on its object (see merge_plate).
+    """
+    by_name = {}
+    for f in sorted((ROOT / "jobs").glob("*.toml")):
+        with open(f, "rb") as fh:
+            j = tomllib.load(fh)
+        by_name[j.get("name")] = j
+    members = []
+    for name, count in job["plate"].items():
+        if name not in by_name:
+            sys.exit(f"{path}: no job named '{name}'")
+        if not str(by_name[name].get("model", "")).endswith(".3mf"):
+            sys.exit(f"{path}: '{name}' isn't a part of a .3mf; plates hold those")
+        if int(count) > 0:
+            members.append((by_name[name], int(count)))
+    if not members:
+        sys.exit(f"{path}: the plate is empty")
+    first = members[0][0]
+    if any(m["profiles"] != first["profiles"] for m, _ in members):
+        sys.exit(f"{path}: the parts use different profiles; a plate needs them all the same")
+    overrides = [m.get("overrides", {}).get("process", {}) for m, _ in members]
+    shared = {k: v for k, v in overrides[0].items() if all(o.get(k) == v for o in overrides)}
+    for k in PLATE_WIDE:
+        on = [o[k] for o in overrides if k in o]
+        if on:
+            shared[k] = max(on)
+    job["members"] = members
+    job["profiles"] = first["profiles"]
+    job["model"] = first["model"]
+    job["overrides"] = {"process": shared}
 
 
 def gcode_name(job, per_plate=1, material=None, nozzle=None):
@@ -119,6 +171,11 @@ def slice_job(job, per_plate=1, material=None, nozzle=None):
         stl = (render_scad(model, out / "model.stl", job.get("scad", {})) if model.suffix == ".scad"
                else render_nurb(model, out / "model.stl", job.get("params", {})))
         model = parts3mf.write([(job["name"], stl, 1)], out / "model.3mf", job["name"], copies=per_plate)
+    elif job.get("members"):
+        colors = list(dict.fromkeys(hex_for(m["color"]) for m, _ in job["members"]))
+        model, plate = merge_plate(job, colors, out)
+        if len(colors) > 1:
+            process, filaments = multi_filament(process, p["filament"], colors, out)
     elif model.suffix == ".3mf":
         model, plate = single_filament(model, out / "model.3mf", job.get("object"), job.get("fill_base"))
 
@@ -126,12 +183,16 @@ def slice_job(job, per_plate=1, material=None, nozzle=None):
     # auto-arrange would spin them (a 45-degree turn of a two-colour inlay, say), so it's off
     # for those. Downloaded 3MFs keep Orca's placement.
     placed = job["model"].endswith((".scad", ".py"))
+    plate_of_parts = bool(job.get("members"))
     cmd = [
         ORCA,
         "--load-settings", f"{p['machine']};{process}",
         "--load-filaments", ";".join(str(f) for f in filaments),
         "--slice", str(plate),
         *(["--arrange", "0", "--orient", "0"] if placed else []),
+        # a plate's parts arrive where their own files put them; arrange spreads them out, all on plate 1
+        # (unasked, it moves each colour to a plate of its own)
+        *(["--arrange", "1", "--orient", "0", "--allow-multicolor-oneplate"] if plate_of_parts else []),
         "--outputdir", str(out),
         str(model),
     ]
@@ -250,6 +311,82 @@ def single_filament(src, dest, only=None, fill_base=None):
                 data = re.sub(rb' paint_color="[^"]*"', b"", data)
             zout.writestr(item, data)
     return dest, plate
+
+
+def merge_plate(job, colors, out):
+    """One 3MF holding each of a plate's parts, as many times as it asks, on plate 1.
+
+    Each part is prepared as when sliced on its own (single_filament: just its object,
+    any fill_base), then its object, mesh files and settings are copied in. An object
+    prints on the filament of its colour and carries the process overrides it doesn't
+    share with the rest of the plate (plate_members). Returns the file and its plate.
+    """
+    shared = job["overrides"]["process"]
+    objects, items, configs, instances, files = [], [], [], [], {}
+    base = None
+    next_id = 1
+    for n, (member, count) in enumerate(job["members"], 1):
+        src, _ = single_filament(ROOT / member["model"], out / f"part-{n}.3mf", member.get("object"), member.get("fill_base"))
+        base = base or src
+        with zipfile.ZipFile(src) as z:
+            root = z.read("3D/3dmodel.model").decode()
+            config = z.read("Metadata/model_settings.config").decode()
+            item = re.search(r'<item\b[^>]*?\bobjectid="(\d+)"[^>]*/>', root)
+            keep = item[1]
+            # its rotation, but over the middle of the bed: a part on another of its file's plates
+            # sits off to the side, where Orca would leave it (arrange then spreads them out)
+            transform = re.search(r'\btransform="([^"]+)"', item[0])[1].split()
+            transform = " ".join(transform[:9] + ["130", "130", transform[11]])
+            obj = re.search(rf'<object id="{keep}"[^>]*>.*?</object>', root, re.S)[0]
+            settings = re.search(rf'<object id="{keep}">.*?</object>', config, re.S)[0]
+            # Orca keys mesh objects by id across every file, so each part's go up by 1000 x its number
+            sub_id = lambda m: f'{m[1]}"{1000 * n + int(m[2])}"'
+            renamed = {}
+            for p in sorted(set(re.findall(r'p:path="([^"]+)"', obj))):
+                renamed[p] = f"/3D/Objects/plate_{n}_{Path(p).name}"
+                files[renamed[p].lstrip("/")] = re.sub(r'(<object id=)"(\d+)"', sub_id, z.read(p.lstrip("/")).decode()).encode()
+            obj = re.sub(r'(<component\b[^>]*?\bobjectid=)"(\d+)"', sub_id, obj)
+            settings = re.sub(r'(<part id=)"(\d+)"', sub_id, settings)
+        own = {k: v for k, v in member.get("overrides", {}).get("process", {}).items()
+               if k not in PLATE_WIDE and shared.get(k) != v}
+        extruder = colors.index(hex_for(member["color"])) + 1
+        for _ in range(count):
+            oid = str(next_id)
+            next_id += 1
+            o = re.sub(r'^<object id="\d+"', f'<object id="{oid}"', obj)
+            o = re.sub(r'p:UUID="[^"]*"', lambda _: f'p:UUID="{uuid.uuid4()}"', o)
+            for a, b in renamed.items():
+                o = o.replace(f'p:path="{a}"', f'p:path="{b}"')
+            objects.append(o)
+            items.append(f'<item objectid="{oid}" p:UUID="{uuid.uuid4()}" transform="{transform}" printable="1" />')
+            c = re.sub(r'^<object id="\d+">', f'<object id="{oid}">', settings)
+            c = re.sub(r'(key="extruder" value=")\d+"', rf'\g<1>{extruder}"', c)
+            c = re.sub(r'(<metadata key="name" value="[^"]*"/>)',
+                       lambda m: m[1] + "".join(f'\n    <metadata key="{k}" value="{v}"/>' for k, v in own.items()), c, count=1)
+            configs.append(c)
+            instances.append(f'    <model_instance>\n      <metadata key="object_id" value="{oid}"/>\n'
+                             f'      <metadata key="instance_id" value="0"/>\n      <metadata key="identify_id" value="{1000 + int(oid)}"/>\n    </model_instance>')
+    dest = out / "model.3mf"
+    skip = re.compile(r"^(3D/Objects/|3D/3dmodel\.model$|3D/_rels/3dmodel\.model\.rels$|Metadata/(model_settings\.config|"
+                      r"layer_config_ranges\.xml|cut_information\.xml|plate_\d+\.json)$)")
+    with zipfile.ZipFile(base) as zin, zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zout:
+        root = zin.read("3D/3dmodel.model").decode()
+        root = re.sub(r"<resources>.*</resources>", lambda _: "<resources>\n" + "\n".join(objects) + "\n </resources>", root, flags=re.S)
+        root = re.sub(r"(<build\b[^>]*>).*?(</build>)", lambda m: m[1] + "\n" + "\n".join(items) + "\n " + m[2], root, flags=re.S)
+        for item in zin.infolist():
+            if not skip.match(item.filename):
+                zout.writestr(item, zin.read(item.filename))
+        zout.writestr("3D/3dmodel.model", root)
+        for name, data in files.items():
+            zout.writestr(name, data)
+        rels = "".join(f'\n <Relationship Target="/{name}" Id="rel-{i}" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>'
+                       for i, name in enumerate(files, 1))
+        zout.writestr("3D/_rels/3dmodel.model.rels", '<?xml version="1.0" encoding="UTF-8"?>\n<Relationships '
+                      f'xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{rels}\n</Relationships>')
+        zout.writestr("Metadata/model_settings.config", '<?xml version="1.0" encoding="UTF-8"?>\n<config>\n  ' + "\n  ".join(configs)
+                      + '\n  <plate>\n    <metadata key="plater_id" value="1"/>\n    <metadata key="plater_name" value=""/>\n'
+                      '    <metadata key="locked" value="false"/>\n' + "\n".join(instances) + "\n  </plate>\n</config>\n")
+    return dest, 1
 
 
 def base_fill(zin, keep, fill):
