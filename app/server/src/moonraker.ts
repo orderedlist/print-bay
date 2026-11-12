@@ -5,7 +5,7 @@ import { MOONRAKER } from "./config.js";
 import type { Material } from "./jobs.js";
 
 /** Creality filament ids (Orca's filament_id; the CFS reports them as material_type) that aren't plain PLA. */
-const MATERIAL_IDS: Record<string, Material> = { "17001": "wood" }; // CR-Wood
+const MATERIAL_IDS: Record<string, Material> = { "17001": "wood", "00002": "silk", "05001": "silk" }; // CR-Wood; Generic PLA-Silk, CR-Silk
 
 /** The spool on the holder outside the CFS (the printer's filament_rack). */
 export const OUTSIDE = "EXT";

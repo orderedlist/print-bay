@@ -52,6 +52,12 @@ strings less. `run.py --material wood` writes `gcode/<job>-wood.gcode`; in the
 app, the print panel's Material switch picks it, and it defaults to Wood when
 the printer has the picked slot set to CR-Wood.
 
+Silk PLA works the same way with `profiles/k2-silk.json` (Orca's "Creality
+Generic PLA Silk @K2-all"): the job's PLA with flow capped at 10 mm³/s, so the
+walls print slower and keep their sheen. `--material silk` writes
+`gcode/<job>-silk.gcode`, and the app picks Silk when the slot is set to
+Generic PLA-Silk or CR-Silk.
+
 For a 0.6 mm nozzle, `run.py --nozzle 0.6` slices with
 `profiles/k2-machine-0.6.json` (Orca's "Creality K2 0.6 nozzle", with the same
 purge-line edit) and lays `profiles/k2-nozzle-0.6.json` over the job's process:

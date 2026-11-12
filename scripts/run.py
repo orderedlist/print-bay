@@ -8,7 +8,7 @@ run.py - slice a job with OrcaSlicer's CLI, then print it on the K2.
   python scripts/run.py jobs/stacking-box.toml --copies 1   # override copy count
   python scripts/run.py jobs/stacking-box.toml --color red  # override the job's color
   python scripts/run.py jobs/ball-marker.toml --per-plate 20 # 20 on the bed at once (OpenSCAD jobs)
-  python scripts/run.py jobs/succulent-pot-3.toml --material wood # wood-fill spool: gcode/<job>-wood.gcode
+  python scripts/run.py jobs/succulent-pot-3.toml --material wood # wood-fill spool: gcode/<job>-wood.gcode (or silk)
   python scripts/run.py jobs/succulent-pot-3.toml --nozzle 0.6     # 0.6 mm nozzle: gcode/<job>-0.6mm.gcode
 
 A job prints in its `color` (a name like "black" or a hex code) from whichever
@@ -72,8 +72,10 @@ COLORS = {
 MAX_COLOR_DISTANCE = 120  # RGB distance; further than this isn't a match
 # Filament profiles for spools that aren't plain PLA, in place of the job's own. Wood fill
 # (profiles/k2-wood.json, from Orca's "CR-Wood @K2 Plus-all"): 210 C so it oozes less,
-# 10 mm3/s so the walls slow to about 110 mm/s, and 1 mm retraction.
-MATERIALS = {"wood": "profiles/k2-wood.json"}
+# 10 mm3/s so the walls slow to about 110 mm/s, and 1 mm retraction. Silk (profiles/k2-silk.json,
+# Orca's "Creality Generic PLA Silk @K2-all"): the job's PLA capped at 10 mm3/s, so walls print
+# slower and keep their sheen.
+MATERIALS = {"wood": "profiles/k2-wood.json", "silk": "profiles/k2-silk.json"}
 # Nozzles other than the stock 0.4: the machine profile in place of the job's, and line
 # widths and speeds laid over its process (from Orca's "Creality K2 0.6 nozzle" and
 # "0.30mm Standard @Creality K2 0.6 nozzle"; layer heights stay the job's).

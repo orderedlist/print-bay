@@ -7,7 +7,7 @@ import { ModelViewer, SEVERITY_COLORS, type ViewAvailability, type ViewMode } fr
 import { Params } from "../components/Params";
 import { ICONS, Toolbar, type Action } from "../components/Toolbar";
 import type { Theme } from "../theme";
-import { IDLE_STATES, type AgentSession, type CheckReport, type Material, type Model, type ScadParam, slotName } from "../types";
+import { IDLE_STATES, type AgentSession, type CheckReport, MATERIAL_NAMES, type Material, type Model, type ScadParam, slotName } from "../types";
 import { plateFit } from "../plate";
 import { stateLabel } from "./PrinterPanel";
 
@@ -204,19 +204,19 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   const chosenFor = (key: string) => slots.find((s) => s.slot === picked[key]);
   const chosenAll = colorways.map((c) => chosenFor(c.key));
   const chosen = chosenAll.every(Boolean) ? chosenAll[0] : undefined;
-  // wood fill slices with its own filament profile (cooler, slower, more retraction); one copy to a plate only
+  // wood fill and silk slice with their own filament profiles; one copy to a plate only
   const outside = chosenAll.some((s) => s?.slot === "EXT");
-  const spoolMaterial: Material = chosenAll.some((s) => s?.material === "wood") ? "wood" : "pla";
+  const spoolMaterial: Material = chosenAll.find((s) => s && s.material !== "pla")?.material ?? "pla";
   const material: Material = perPlate > 1 ? "pla" : materialPick ?? spoolMaterial;
-  const wood = material === "wood";
-  const stale = wood ? !!job?.wood.stale : !!job?.stale;
-  const colorsText = chosenAll.map((c) => (c ? colorName(c.color).toLowerCase() : "?")).join(" and ") + (wood ? " wood" : "");
+  const sliced = material === "pla" ? job : job?.materials[material];
+  const stale = !!sliced?.stale;
+  const colorsText = chosenAll.map((c) => (c ? colorName(c.color).toLowerCase() : "?")).join(" and ") + (material === "pla" ? "" : ` ${material}`);
   const idle = status ? IDLE_STATES.has(status.state) : false;
   // how many fit on one plate (OpenSCAD models: the slicer lays them out), from the size as printed
   const fit = parametric && checks ? plateFit(checks.size[0], checks.size[1], multi) : 1;
   useEffect(() => { if (perPlate > fit) setPerPlate(fit); }, [fit]); // eslint-disable-line react-hooks/exhaustive-deps
   const plate = perPlate > 1 ? job?.plates.find((p) => p.perPlate === perPlate) : undefined;
-  const exact = perPlate === 1 ? (wood ? job?.wood.stats : job?.stats) : plate && !plate.stale ? plate.stats : null;
+  const exact = perPlate === 1 ? sliced?.stats : plate && !plate.stale ? plate.stats : null;
   // until this plate is sliced, draw a line through the nearest counts that are: plates share
   // travel and colour swaps, so one copy times n would overestimate badly
   const stats = exact ?? (job?.stats && perPlate > 1 ? interpolate(perPlate, [
@@ -431,15 +431,18 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <span style={{ flexGrow: 1 }}>Material</span>
                     <div className="seg seg-sm" role="radiogroup" aria-label="Material" style={{ flex: "none" }}
-                      title={perPlate > 1 ? "Wood is set up for one to a plate" : undefined}>
-                      {(["pla", "wood"] as const).map((m) => (
-                        <button key={m} role="radio" aria-checked={material === m} disabled={perPlate > 1 && m === "wood"}
-                          onClick={() => setMaterialPick(m)} style={{ padding: "0 10px" }}>{m === "pla" ? "PLA" : "Wood"}</button>
+                      title={perPlate > 1 ? "Wood and silk are set up for one to a plate" : undefined}>
+                      {(["pla", "silk", "wood"] as const).map((m) => (
+                        <button key={m} role="radio" aria-checked={material === m} disabled={perPlate > 1 && m !== "pla"}
+                          onClick={() => setMaterialPick(m)} style={{ padding: "0 10px" }}>{MATERIAL_NAMES[m]}</button>
                       ))}
                     </div>
                   </div>
-                  {wood && <div className="faint" style={{ fontSize: 12 }}>
-                    Wood fill: 210 °C, slower walls and longer retraction, so it strings less.{materialPick && materialPick !== spoolMaterial ? "" : " The printer has this spool set as wood."}
+                  {material !== "pla" && <div className="faint" style={{ fontSize: 12 }}>
+                    {material === "wood"
+                      ? "Wood fill: 210 °C, slower walls and longer retraction, so it strings less."
+                      : "Silk: flow capped at 10 mm³/s, so walls print slower and keep their sheen."}
+                    {materialPick && materialPick !== spoolMaterial ? "" : ` The printer has this spool set as ${material}.`}
                   </div>}
                 </div>
               ) : <div className="muted">The printer reports no spools{status?.online ? "" : " (offline)"}.</div>}

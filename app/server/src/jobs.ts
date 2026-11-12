@@ -43,8 +43,10 @@ export interface Stats { time: string; seconds: number; grams: number; cost: Cos
  * What a spool is made of, as far as slicing cares: plain PLA uses the job's own filament
  * profile; the others swap in their own (see MATERIALS in scripts/run.py).
  */
-export type Material = "pla" | "wood";
-export const MATERIAL_PROFILES: Record<Exclude<Material, "pla">, string> = { wood: "profiles/k2-wood.json" };
+export type Material = "pla" | "wood" | "silk";
+export type OtherMaterial = Exclude<Material, "pla">;
+export const MATERIAL_PROFILES: Record<OtherMaterial, string> = { wood: "profiles/k2-wood.json", silk: "profiles/k2-silk.json" };
+const OTHER_MATERIALS = Object.keys(MATERIAL_PROFILES) as OtherMaterial[];
 export const isMaterial = (m: unknown): m is Material => m === "pla" || (typeof m === "string" && m in MATERIAL_PROFILES);
 
 export interface ModelJob {
@@ -58,7 +60,7 @@ export interface ModelJob {
   stale: boolean; // model, job or profiles changed since the last slice
   plates: { perPlate: number; stats: Stats | null; stale: boolean }[]; // sliced with several to a plate
   plate: { job: string; count: number }[] | null; // a plate of the model's parts: what's on it
-  wood: { stats: Stats | null; stale: boolean }; // sliced for a wood-fill spool
+  materials: Record<OtherMaterial, { stats: Stats | null; stale: boolean }>; // sliced for a wood-fill or silk spool
 }
 
 export interface Model {
@@ -238,7 +240,7 @@ export function listModels(): Model[] {
             .map((f) => f.match(new RegExp(`^${j.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-x(\\d+)\\.gcode$`))?.[1])
             .filter((n): n is string => !!n).map(Number).sort((a, b) => a - b)
             .map((n) => ({ perPlate: n, stats: gcodeStats(j.name, r, n), stale: isStale(j, n) })),
-          wood: { stats: gcodeStats(j.name, r, 1, "wood"), stale: isStale(j, 1, "wood") },
+          materials: Object.fromEntries(OTHER_MATERIALS.map((m) => [m, { stats: gcodeStats(j.name, r, 1, m), stale: isStale(j, 1, m) }])) as ModelJob["materials"],
           plate: j.plate ?? null,
         })),
       };
