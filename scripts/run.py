@@ -72,7 +72,8 @@ COLORS = {
 MAX_COLOR_DISTANCE = 120  # RGB distance; further than this isn't a match
 # Filament profiles for spools that aren't plain PLA, in place of the job's own. Wood fill
 # (profiles/k2-wood.json, from Orca's "CR-Wood @K2 Plus-all"): 210 C so it oozes less,
-# 10 mm3/s so the walls slow to about 110 mm/s, and 1 mm retraction. Silk (profiles/k2-silk.json,
+# 10 mm3/s so the walls slow to about 110 mm/s, and 1 mm retraction; chamber control off (M191
+# runs the K2's exhaust fan once the chamber reaches 35 C, which left a line partway up). Silk (profiles/k2-silk.json,
 # Orca's "Creality Generic PLA Silk @K2-all"): the job's PLA capped at 10 mm3/s, so walls print
 # slower and keep their sheen.
 MATERIALS = {"wood": "profiles/k2-wood.json", "silk": "profiles/k2-silk.json"}

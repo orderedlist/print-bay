@@ -48,7 +48,10 @@ snagged and the motors stalled. Keep that edit if you rebuild it with
 Wood-fill spools (CR-Wood) slice with `profiles/k2-wood.json` in place of the
 job's filament profile: Orca's "CR-Wood @K2 Plus-all" at 210 °C (215 °C first
 layer), 10 mm³/s (walls slow to about 110 mm/s) and 1 mm retraction, so it
-strings less. `run.py --material wood` writes `gcode/<job>-wood.gcode`; in the
+strings less. It leaves chamber control off: Orca's preset sends `M191 S35`,
+and on the K2 (no chamber heater) that switches the exhaust fan on at full speed
+once the chamber passes 35 °C, partway up the print, leaving a line around it.
+`run.py --material wood` writes `gcode/<job>-wood.gcode`; in the
 app, the print panel's Material switch picks it, and it defaults to Wood when
 the printer has the picked slot set to CR-Wood.
 
