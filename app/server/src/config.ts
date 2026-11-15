@@ -9,13 +9,37 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 /** The app's own code: scripts/, app/, and the starter profiles. */
 export const APP_ROOT = process.env.PRINT_BAY_ROOT ?? path.resolve(here, "../../..");
 
+/** Print Bay's folder for this computer (also Electron's own data folder, so the library goes in a subfolder). */
+export const SUPPORT = path.join(os.homedir(), "Library", "Application Support", "Print Bay");
+/** Which library to use, one path on one line: set in Settings, read by the terminal scripts too. */
+export const LOCATION_FILE = path.join(SUPPORT, "library-location");
+export const DEFAULT_LIBRARY = path.join(SUPPORT, "Library");
+
+export type LibrarySource = "env" | "chosen" | "checkout" | "default";
+function chosenLibrary(): string | null {
+  try { return fs.readFileSync(LOCATION_FILE, "utf8").trim() || null; } catch { return null; }
+}
+
 /**
  * The user's library: models/, jobs/, profiles/, gcode/, costs.toml and the app's cache.
- * A checkout with its own jobs/ keeps using itself; anyone else gets a folder of their own.
+ * PRINT_BAY_DATA, else the folder chosen in Settings, else a checkout with its own jobs/
+ * (it keeps using itself), else a folder of the user's own.
  */
-export const DATA = path.resolve(process.env.PRINT_BAY_DATA ?? (fs.existsSync(path.join(APP_ROOT, "jobs"))
-  ? APP_ROOT : path.join(os.homedir(), "Library", "Application Support", "Print Bay")));
+export const [DATA, LIBRARY_SOURCE]: [string, LibrarySource] = (() => {
+  if (process.env.PRINT_BAY_DATA) return [path.resolve(process.env.PRINT_BAY_DATA), "env"];
+  const chosen = chosenLibrary();
+  if (chosen) return [path.resolve(chosen), "chosen"];
+  if (fs.existsSync(path.join(APP_ROOT, "jobs"))) return [path.resolve(APP_ROOT), "checkout"];
+  return [DEFAULT_LIBRARY, "default"];
+})();
 process.env.PRINT_BAY_DATA = DATA; // slicing, nurb, the checks CLI and Claude's tools all run as children
+
+/** Use another library from the next start (null: back to the default). */
+export function chooseLibrary(dir: string | null): void {
+  fs.mkdirSync(SUPPORT, { recursive: true });
+  if (dir) fs.writeFileSync(LOCATION_FILE, path.resolve(dir) + "\n");
+  else fs.rmSync(LOCATION_FILE, { force: true });
+}
 
 // What the environment said before the app set anything: it wins over settings.json.
 const ENV0 = { ...process.env };

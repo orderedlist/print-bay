@@ -101,6 +101,7 @@ export interface SettingsView {
   printer: { host: string | null; source: SettingSource };
   tools: ToolStatus[];
   rates: Rates;
-  library: { path: string; fresh: boolean };
+  library: { path: string; source: "env" | "chosen" | "checkout" | "default"; fresh: boolean; next: string | null; default: string };
+  desktop: { restart: boolean; pickFolder: boolean };
   caps: Caps;
 }

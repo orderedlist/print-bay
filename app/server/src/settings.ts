@@ -2,8 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  APP_ROOT, DATA, normalizeHost, readSettings, resolvePrinter, resolveTool, writeSettings,
-  type Settings, type Source, type ToolName,
+  APP_ROOT, chooseLibrary, DATA, DEFAULT_LIBRARY, LIBRARY_SOURCE, normalizeHost, readSettings, resolvePrinter, resolveTool, writeSettings,
+  type LibrarySource, type Settings, type Source, type ToolName,
 } from "./config.js";
 import { rates, type Rates } from "./jobs.js";
 
@@ -24,7 +24,8 @@ export interface SettingsView {
   printer: { host: string | null; source: Source };
   tools: ToolStatus[];
   rates: Rates;
-  library: { path: string; fresh: boolean };
+  /** `next`: chosen in Settings, used from the next start */
+  library: { path: string; source: LibrarySource; fresh: boolean; next: string | null; default: string };
   /** what works on this computer, so the UI can hide the rest */
   caps: { slice: boolean; openscad: boolean; claude: boolean; git: boolean; nurb: boolean };
 }
@@ -64,12 +65,15 @@ export function view(): SettingsView {
     printer: resolvePrinter(s),
     tools,
     rates: rates(),
-    library: { path: DATA, fresh: libraryFresh() },
+    library: { path: DATA, source: LIBRARY_SOURCE, fresh: libraryFresh(), next: nextLibrary, default: DEFAULT_LIBRARY },
     caps: { slice: ok("orca"), openscad: ok("openscad"), claude: ok("claude"), git: ok("git"), nurb: ok("nurb") },
   };
 }
 
+let nextLibrary: string | null = null; // chosen this run; the server reads the location when it starts
+
 export interface SettingsUpdate {
+  library?: string | null; // a folder to use from the next start; null: the default
   printer?: string | null; // "" or null clears it
   tools?: Partial<Record<ToolName, string | null>>; // null: find it again
   rates?: Partial<Rates>;
@@ -95,6 +99,20 @@ export function update(u: SettingsUpdate): SettingsView {
   }
   if (u.rates) writeRates({ ...rates(), ...u.rates });
   if (u.setupDone !== undefined) s.setupDone = u.setupDone;
+  if (u.library !== undefined) {
+    if (LIBRARY_SOURCE === "env") throw fail("PRINT_BAY_DATA sets the library; unset it to choose one here.", 409);
+    const raw = u.library?.trim() ?? "";
+    if (raw && !raw.startsWith("/") && !raw.startsWith("~/")) throw fail("Use the folder's full path");
+    const dir = raw ? path.resolve(raw.replace(/^~(?=\/)/, process.env.HOME ?? "~")) : null;
+    if (dir) {
+      if (fs.existsSync(dir) && !fs.statSync(dir).isDirectory()) throw fail(`${dir} is a file, not a folder`);
+      if (!fs.existsSync(path.dirname(dir))) throw fail(`There's no folder ${path.dirname(dir)}`);
+    }
+    chooseLibrary(dir);
+    // with no choice, the next start uses this checkout (if it has jobs/) or the default folder
+    nextLibrary = dir ?? (fs.existsSync(path.join(APP_ROOT, "jobs")) ? APP_ROOT : DEFAULT_LIBRARY);
+    if (path.resolve(nextLibrary) === path.resolve(DATA)) nextLibrary = null;
+  }
   writeSettings(s);
   return view();
 }

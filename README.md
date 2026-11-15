@@ -129,13 +129,18 @@ address (192.168.4.81). Only the computer running Print Bay can change settings.
 ### Library
 
 The app keeps each person's models, jobs, profiles, G-code, `costs.toml` and
-cache in a library folder, apart from its code. A checkout with its own `jobs/`
-(like this repo) is its own library, so nothing changes here. Anywhere else the
-library is `~/Library/Application Support/Print Bay/`, which starts empty
-with the K2 profiles from `profiles/` and the rates from `costs.toml`. Set
-`PRINT_BAY_DATA` to use another folder. The app passes it to `scripts/nurb`
-and Claude's tools, `run.py` and `setup.py` read it too, and Claude chats run
-inside the library.
+cache in a library folder, apart from its code. Which folder, in order:
+1. `PRINT_BAY_DATA`, if set.
+2. The folder chosen in **Settings → Library → Use another folder…**, saved in
+   `~/Library/Application Support/Print Bay/library-location`. The desktop app
+   restarts into it; an empty or new folder becomes a new library.
+3. This checkout, while it has its own `jobs/`.
+4. `~/Library/Application Support/Print Bay/Library`, which starts empty with
+   the K2 profiles from `profiles/` and the rates from `costs.toml`.
+
+`run.py`, `setup.py` and `scripts/nurb` find it the same way, so the terminal
+scripts follow the app. The app passes it on to Claude's tools, and Claude
+chats run inside the library.
 
 ### Changes (git)
 

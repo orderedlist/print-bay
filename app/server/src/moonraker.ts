@@ -53,7 +53,7 @@ function slotsFrom(box: any): Slot[] {
   return found;
 }
 
-const OFFLINE: PrinterStatus = {
+export const OFFLINE: PrinterStatus = {
   online: false, state: "offline", filename: "", progress: 0, printSeconds: 0, etaSeconds: null,
   layer: { current: null, total: null }, nozzle: { temp: 0, target: 0 }, bed: { temp: 0, target: 0 },
   slots: [], message: "",

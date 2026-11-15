@@ -37,7 +37,7 @@ export function SettingsPanel({ settings, setSettings, setup, toast }: Props) {
         </div>
       )}
       <PrinterSection settings={settings} save={save} toast={toast} />
-      <LibrarySection settings={settings} setup={setup} toast={toast} setSettings={setSettings} />
+      <LibrarySection settings={settings} setup={setup} toast={toast} setSettings={setSettings} save={save} />
       <div className="sec">
         <div className="sech">Programs<span className="count">{settings.tools.filter((t) => t.ok).length}/{settings.tools.length}</span></div>
         <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 12 }}>
@@ -107,9 +107,29 @@ function PrinterSection({ settings, save, toast }: { settings: SettingsView; sav
   );
 }
 
-function LibrarySection({ settings, setup, toast, setSettings }: Pick<Props, "settings" | "setup" | "toast" | "setSettings">) {
+const LIBRARY_FROM: Record<SettingsView["library"]["source"], string> = {
+  env: "Set by PRINT_BAY_DATA in the environment.",
+  chosen: "Chosen in Settings.",
+  checkout: "This copy of the Print Bay repo, which has its own models.",
+  default: "The standard place on this Mac.",
+};
+
+function LibrarySection({ settings, setup, toast, setSettings, save }: Pick<Props, "settings" | "setup" | "toast" | "setSettings"> & { save: (b: object, done?: string) => Promise<boolean> }) {
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
+  const [typing, setTyping] = useState<string | null>(null); // a path being typed, without the desktop folder picker
+  const lib = settings.library;
+  const choose = async () => {
+    if (!settings.desktop.pickFolder) { setTyping(""); return; }
+    try {
+      const { path } = await api<{ path: string | null }>("/api/library/pick", { method: "POST" });
+      if (path) await save({ library: path });
+    } catch (e) { toast((e as Error).message, true); }
+  };
+  const restart = async () => {
+    try { await api("/api/restart", { method: "POST" }); toast("Restarting…"); }
+    catch (e) { toast((e as Error).message, true); }
+  };
   const start = async () => {
     setBusy(true);
     try {
@@ -127,7 +147,37 @@ function LibrarySection({ settings, setup, toast, setSettings }: Pick<Props, "se
         Library
       </div>
       <div className="faint mono" style={{ fontSize: 11.5, marginTop: 8, wordBreak: "break-all" }}>{settings.library.path}</div>
-      <div className="muted" style={{ fontSize: 12, marginTop: 6, lineHeight: 1.45 }}>Your models, jobs, slicer profiles and rates. It's a git repository you can push from Changes.</div>
+      <div className="muted" style={{ fontSize: 12, marginTop: 6, lineHeight: 1.45 }}>
+        Your models, jobs, slicer profiles and rates. It's a git repository you can push from Changes. {LIBRARY_FROM[lib.source]}
+      </div>
+      {lib.source !== "env" && typing === null && (
+        <div style={{ display: "flex", gap: 14, marginTop: 8 }}>
+          <button className="link-btn" style={{ fontSize: 12 }} onClick={choose}>Use another folder…</button>
+          {lib.source === "chosen" && <button className="link-btn" style={{ fontSize: 12 }} onClick={() => save({ library: null })}>Back to the standard place</button>}
+        </div>
+      )}
+      {typing !== null && (
+        <div style={{ marginTop: 8 }}>
+          <input className="field mono" style={{ fontSize: 12 }} value={typing} placeholder="/Users/you/Prints" aria-label="Library folder" autoFocus
+            onChange={(e) => setTyping(e.target.value)}
+            onKeyDown={async (e) => { if (e.key === "Enter" && typing.trim() && await save({ library: typing })) setTyping(null); if (e.key === "Escape") setTyping(null); }} />
+          <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+            <button className="cta cta-sm" style={{ padding: "0 12px" }} disabled={!typing.trim()} onClick={async () => { if (await save({ library: typing })) setTyping(null); }}>Use it</button>
+            <button className="cta cta-sm" style={{ padding: "0 12px" }} onClick={() => setTyping(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {lib.next && (
+        <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 10, background: "var(--panel2)" }}>
+          <div style={{ fontSize: 12, lineHeight: 1.45 }}>
+            Print Bay opens <span className="mono" style={{ wordBreak: "break-all" }}>{lib.next}</span> the next time it starts.
+            {" "}An empty or new folder becomes a new library.
+          </div>
+          {settings.desktop.restart
+            ? <button className="cta cta-sm go" style={{ marginTop: 8, padding: "0 12px" }} onClick={restart}>Restart now</button>
+            : <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>Restart the server to switch.</div>}
+        </div>
+      )}
       {settings.library.fresh && settings.caps.git && (
         <>
           <div className="muted" style={{ fontSize: 12, marginTop: 12, lineHeight: 1.45 }}>

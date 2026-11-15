@@ -17,18 +17,30 @@ import * as agent from "./agent.js";
 import * as repos from "./repos.js";
 import * as settings from "./settings.js";
 
-export interface StartOptions { port?: number; host?: string; quiet?: boolean }
+export interface StartOptions {
+  port?: number;
+  host?: string;
+  quiet?: boolean;
+  /** The desktop app can restart itself (to open another library) and show a folder picker. */
+  restart?: () => void;
+  pickFolder?: () => Promise<string | null>;
+}
 
 export async function start(opts: StartOptions = {}) {
   const app = Fastify({ logger: !opts.quiet && { level: "warn" } });
   await repos.ensureLibraryRepo().catch((e) => console.warn(`Couldn't make the library a git repo: ${e.message}`));
-  let status = await moonraker.getStatus();
-
-  const poll = setInterval(async () => {
+  // Listen right away; the printer may be off or its name slow to resolve. Poll every 2 s
+  // after the last answer, so a slow printer never has requests piling up.
+  let status: moonraker.PrinterStatus = { ...moonraker.OFFLINE, message: "Connecting to the printer…" };
+  let closed = false;
+  let poll: NodeJS.Timeout | null = null;
+  const pollStatus = async () => {
     status = await moonraker.getStatus();
     publish("status", status);
-  }, 2000);
-  app.addHook("onClose", async () => clearInterval(poll));
+    if (!closed) poll = setTimeout(pollStatus, 2000);
+  };
+  void pollStatus();
+  app.addHook("onClose", async () => { closed = true; if (poll) clearTimeout(poll); });
 
   // Files change outside the app too (CLI slices, nurb exports, hand edits):
   // tell browsers to refresh models when they do, coalescing bursts.
@@ -123,10 +135,11 @@ export async function start(opts: StartOptions = {}) {
   // Changing where the app reaches the printer, runs programs from, or pushes to: only from this computer.
   const local = (ip: string) => /^(127\.|::1$|::ffff:127\.)/.test(ip);
   const localOnly = (what: string) => Object.assign(new Error(`${what} from the computer running Print Bay`), { statusCode: 403 });
-  app.get("/api/settings", async () => settings.view());
+  const desktop = { restart: !!opts.restart, pickFolder: !!opts.pickFolder };
+  app.get("/api/settings", async () => ({ ...settings.view(), desktop }));
   app.put<{ Body: settings.SettingsUpdate }>("/api/settings", async (req) => {
     if (!local(req.ip)) throw localOnly("Change settings");
-    const v = settings.update(req.body ?? {});
+    const v = { ...settings.update(req.body ?? {}), desktop };
     status = await moonraker.getStatus(); // a new printer address shows at once
     publish("status", status);
     return v;
@@ -134,6 +147,17 @@ export async function start(opts: StartOptions = {}) {
   app.post<{ Body: { host: string } }>("/api/settings/test-printer", async (req) => {
     const host = normalizeHost(req.body?.host ?? "");
     return { host, ...(await moonraker.probe(host)) };
+  });
+  app.post("/api/library/pick", async (req) => {
+    if (!local(req.ip)) throw localOnly("Choose a folder");
+    if (!opts.pickFolder) throw Object.assign(new Error("Type the folder's path instead"), { statusCode: 409 });
+    return { path: await opts.pickFolder() };
+  });
+  app.post("/api/restart", async (req, reply) => {
+    if (!local(req.ip)) throw localOnly("Restart Print Bay");
+    if (!opts.restart) return reply.status(409).send({ error: "Restart the server yourself (npm start) to open the other library." });
+    setTimeout(opts.restart, 300); // answer first
+    return { ok: true };
   });
   app.post<{ Body: { url: string } }>("/api/library/start-from-remote", async (req) => {
     if (!local(req.ip)) throw localOnly("Change the library");
@@ -183,6 +207,11 @@ export async function start(opts: StartOptions = {}) {
 
   const port = opts.port ?? PORT;
   const host = opts.host ?? HOST;
-  await app.listen({ port, host });
+  try {
+    await app.listen({ port, host });
+  } catch (err) {
+    await app.close(); // stops the status polling and file watchers before the caller retries
+    throw err;
+  }
   return { app, url: `http://localhost:${port}` };
 }

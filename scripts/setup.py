@@ -24,8 +24,21 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # the app: scripts/
-# the library (models/, jobs/, profiles/, gcode/): the app sets PRINT_BAY_DATA; a checkout is its own
-DATA = Path(os.environ.get("PRINT_BAY_DATA") or ROOT).resolve()
+# the library (models/, jobs/, profiles/, gcode/), as the app finds it: PRINT_BAY_DATA, else the
+# folder chosen in Print Bay's Settings, else this checkout if it has jobs/, else the standard place
+SUPPORT = Path.home() / "Library/Application Support/Print Bay"
+
+
+def find_library():
+    if os.environ.get("PRINT_BAY_DATA"):
+        return Path(os.environ["PRINT_BAY_DATA"])
+    chosen = SUPPORT / "library-location"
+    if chosen.exists() and chosen.read_text().strip():
+        return Path(chosen.read_text().strip())
+    return ROOT if (ROOT / "jobs").is_dir() else SUPPORT / "Library"
+
+
+DATA = find_library().resolve()
 ORCA = os.environ.get("ORCA", "/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer")
 VENDORS = ("Creality", "OrcaFilamentLibrary")  # searched in order for presets
 DOWNLOADS = Path.home() / "Downloads"

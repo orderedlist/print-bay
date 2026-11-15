@@ -5,7 +5,10 @@
 # A plain path, so Claude's permission rules can name it (nurb lives under "Application Support").
 set -e
 root=${0:A:h:h}
-data=${PRINT_BAY_DATA:-$root}   # the library the model folder is in (the app sets it)
+# the library the model folder is in: as the app sets it, else as chosen in its Settings, else this checkout
+support="$HOME/Library/Application Support/Print Bay"
+data=${PRINT_BAY_DATA:-$(cat "$support/library-location" 2>/dev/null)}
+[[ -n $data ]] || { [[ -d $root/jobs ]] && data=$root || data="$support/Library"; }
 env=${NURB_ENV:-$HOME/Library/Application Support/dev.nurb.desktop/env/bin}
 dir=$1; shift
 cd "$data/$dir"
