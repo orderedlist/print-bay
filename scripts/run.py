@@ -81,8 +81,14 @@ COLORS = {
 MAX_COLOR_DISTANCE = 120  # RGB distance; further than this isn't a match
 
 
+def job_path(path):
+    """A job file from where you are, else from the library (jobs/<name>.toml works from anywhere)."""
+    p = Path(path)
+    return p if p.exists() else DATA / p
+
+
 def load_job(path):
-    with open(path, "rb") as fh:
+    with open(job_path(path), "rb") as fh:
         return tomllib.load(fh)
 
 
@@ -91,7 +97,7 @@ def slice_job(path, per_plate=1, material=None, nozzle=None, one_color=False, pa
 
     With `path_only`, just where that G-code goes, without slicing.
     """
-    args = [str(SLICE), str(path), "--per-plate", str(per_plate),
+    args = [str(SLICE), str(job_path(path)), "--per-plate", str(per_plate),
             *(["--material", material] if material else []), *(["--nozzle", nozzle] if nozzle else []),
             *(["--one-color"] if one_color else []), *(["--path-only"] if path_only else [])]
     res = subprocess.run(args, stdout=subprocess.PIPE, text=True, env={**os.environ, "PRINT_BAY_DATA": str(DATA)})

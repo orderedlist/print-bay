@@ -9,4 +9,6 @@ cli="$root/app/server/dist/slice-cli.js"
 if [[ -n $PRINT_BAY_NODE ]]; then
   ELECTRON_RUN_AS_NODE=1 exec "$PRINT_BAY_NODE" "$cli" "$@"
 fi
-exec node "$cli" "$@"
+# Node as the app repo pins it (mise picks a version by folder, and this may run from anywhere)
+node=$(cd "$root" && command -v mise >/dev/null && mise which node 2>/dev/null) || node=node
+exec "$node" "$cli" "$@"

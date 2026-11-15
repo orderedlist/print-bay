@@ -129,7 +129,8 @@ def main():
     ap.add_argument("--force", action="store_true", help="rebuild profiles that already exist")
     a = ap.parse_args()
 
-    with open(a.job, "rb") as fh:
+    job_file = Path(a.job) if Path(a.job).exists() else DATA / a.job  # from here, else from the library
+    with open(job_file, "rb") as fh:
         job = tomllib.load(fh)
 
     install_orca()

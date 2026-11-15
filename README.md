@@ -1,19 +1,27 @@
 # 3d-prints
 
-Models, slicer profiles, and scripts for printing on the Creality K2 Combo
-(Moonraker at `192.168.4.42:7125`).
+Print Bay and the scripts for printing on the Creality K2 Combo (Moonraker at
+`192.168.4.42:7125`). The models, jobs and plates live in a library of their
+own, a separate private repo (here, `~/dev/3d-prints-library`; see Library
+below), so this repo is just the app.
 
 ```
-models/<name>/      downloaded .3mf/.stl + SOURCE.md (link, license)
-profiles/           OrcaSlicer presets exported as JSON
-jobs/<name>.toml    model + profiles + copy count
+profiles/           OrcaSlicer presets exported as JSON: what a new library starts with
 scripts/setup.py    install Orca, fetch the model, build profiles
 scripts/k2.py       printer CLI (status, upload, print, watch, pause...)
 scripts/run.py      slice a job (through scripts/slice), then print it
 scripts/slice       Print Bay's slicer from the terminal (app/server/src/slicer.ts)
 app/                Print Bay: desktop/web app for the printer and the models
-costs.toml          filament and power rates for the app's cost estimates
-gcode/              sliced output (git-ignored)
+costs.toml          default filament and power rates for a new library
+```
+
+In the library:
+
+```
+models/<name>/      downloaded .3mf/.stl/.scad + SOURCE.md (link, license)
+jobs/<name>.toml    model + profiles + copy count
+plates/<name>.toml  several jobs' parts printed at once
+profiles/, costs.toml, gcode/ (sliced output, not committed)
 ```
 
 ## Setup
@@ -83,6 +91,8 @@ colour with no swaps (`run.py --one-color`, `gcode/<job>-1c.gcode`); this works 
 multi-colour OpenSCAD jobs too.
 
 ## Adding a model
+
+In the library:
 
 1. Make `models/<name>/`, drop in the file (.3mf, .stl, or .scad), add `SOURCE.md`.
 2. Copy `jobs/stacking-box.toml` to `jobs/<name>.toml` and edit it.
