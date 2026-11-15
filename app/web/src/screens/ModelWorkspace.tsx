@@ -75,13 +75,14 @@ interface Props {
   goPrinter: () => void;
   newModel: () => void;
   toast: (msg: string, error?: boolean) => void;
+  /** The part being viewed (a job of a multi-part model); kept by App, so it's still there after visiting another tab. */
+  jobName: string | null;
+  setJobName: (job: string | null) => void;
 }
 
 /** A selected model: on the stage, with the bottom toolbar and the inspector beside it. */
-export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTheme, shift, inspectorSlot, close, goPrinter, newModel, toast }: Props) {
+export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTheme, shift, inspectorSlot, close, goPrinter, newModel, toast, jobName, setJobName }: Props) {
   // a multi-part model (labelled jobs, say a plant and its pot) prints one part at a time
-  const [jobName, setJobName] = useState<string | null>(null);
-  useEffect(() => setJobName(null), [model.id]);
   const job = model.jobs.find((j) => j.name === jobName) ?? model.jobs[0];
   const partGroups = pickerGroups(model.jobs);
   // ---- plates: several parts printed at once ----

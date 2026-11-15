@@ -61,6 +61,10 @@ export function App() {
     return () => removeEventListener("hashchange", onHash);
   }, []);
   const go = (hash: string) => { location.hash = hash; };
+  // Coming back to Models opens the model you left, on the part you were viewing.
+  const [lastModel, setLastModel] = useState<string | null>(() => (route.left === "models" ? route.id : null));
+  useEffect(() => { if (route.left === "models") setLastModel(route.id); }, [route]);
+  const [parts, setParts] = useState<Record<string, string | null>>({});
   const openModel = (id: string) => go(`/models/${encodeURIComponent(id)}`);
 
   // ⌘F: search the library
@@ -104,7 +108,8 @@ export function App() {
         ) : route.left === "printer" ? (
           <Camera openSettings={() => go("/settings")} />
         ) : selected ? (
-          <ModelWorkspace key={selected.id} model={selected} live={live} caps={caps} tab={tab} setTab={setTab} theme={theme} toggleTheme={toggleTheme}
+          <ModelWorkspace key={selected.id} model={selected} live={live} caps={caps} tab={tab} setTab={setTab}
+            jobName={parts[selected.id] ?? null} setJobName={(job) => setParts((p) => ({ ...p, [selected.id]: job }))} theme={theme} toggleTheme={toggleTheme}
             shift={shift} inspectorSlot={inspectorSlot} close={() => go("/models")} goPrinter={() => go("/printer")} newModel={() => go("/create")} toast={toast} />
         ) : (
           <>
@@ -165,7 +170,7 @@ export function App() {
           {!setup && <div className="seg" role="tablist" aria-label="Section">
             <button role="tab" aria-selected={route.left === "printer"} onClick={() => go("/printer")}>Printer</button>
             <button role="tab" aria-selected={route.left === "models" || route.left === "create"}
-              onClick={() => go(selectedId ? `/models/${encodeURIComponent(selectedId)}` : "/models")}>Models</button>
+              onClick={() => go(lastModel ? `/models/${encodeURIComponent(lastModel)}` : "/models")}>Models</button>
             {caps.git && (
               <button role="tab" aria-selected={route.left === "changes"} onClick={() => go("/changes")}
                 aria-label={changed ? `Changes, ${changed} uncommitted` : "Changes"}>
