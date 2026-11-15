@@ -1,6 +1,6 @@
 // Stage what the packaged app carries in build/printbay, laid out like the repo so the
 // server's paths work unchanged (APP_ROOT = Contents/Resources/printbay):
-//   app/server/dist/{index,check-cli}.js   the server and the checks CLI, each one file with its dependencies
+//   app/server/dist/{index,check-cli,check-worker}.js   the server, the checks CLI and its worker, each one file
 //   app/web/dist/                           the built UI
 //   scripts/{check,nurb,nurb_part.py}       Claude's tools and the nurb builder
 //   profiles/*.json, costs.toml             what a new library starts with
@@ -30,6 +30,7 @@ await build({
   entryPoints: {
     index: path.join(repo, "app/server/src/index.ts"),
     "check-cli": path.join(repo, "app/server/src/check-cli.ts"),
+    "check-worker": path.join(repo, "app/server/src/check-worker.ts"), // modelchecks.ts runs the checks in it
   },
   outdir: path.join(out, "app/server/dist"),
   bundle: true,
