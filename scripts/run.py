@@ -10,6 +10,7 @@ run.py - slice a job with OrcaSlicer's CLI, then print it on the K2.
   python scripts/run.py jobs/ball-marker.toml --per-plate 20 # 20 on the bed at once (OpenSCAD jobs)
   python scripts/run.py jobs/succulent-pot-3.toml --material wood # wood-fill spool: gcode/<job>-wood.gcode (or silk)
   python scripts/run.py jobs/succulent-pot-3.toml --nozzle 0.6     # 0.6 mm nozzle: gcode/<job>-0.6mm.gcode
+  python scripts/run.py plates/succulent-fruit-fly-trap-plate-3.toml --one-color # every part from one spool: -1c
 
 A job prints in its `color` (a name like "black" or a hex code) from whichever
 CFS slot holds it. A multi-colour OpenSCAD job lists its parts instead:
@@ -134,14 +135,17 @@ def plate_members(job, path):
     job["overrides"] = {"process": shared}
 
 
-def gcode_name(job, per_plate=1, material=None, nozzle=None):
-    """gcode/<job>.gcode, gcode/<job>-x<n>.gcode for n to a plate, then -<material> if not PLA, then -<nozzle>mm if not 0.4."""
+def gcode_name(job, per_plate=1, material=None, nozzle=None, one_color=False):
+    """gcode/<job>.gcode, gcode/<job>-x<n>.gcode for n to a plate, -1c for a multi-colour job from one spool,
+    then -<material> if not PLA, then -<nozzle>mm if not 0.4."""
     name = f"{job['name']}-x{per_plate}" if per_plate > 1 else job["name"]
+    name = f"{name}-1c" if one_color else name
     name = f"{name}-{material}" if material else name
     return f"{name}-{nozzle}mm" if nozzle else name
 
 
-def slice_job(job, per_plate=1, material=None, nozzle=None):
+def slice_job(job, per_plate=1, material=None, nozzle=None, one_color=False):
+    """`one_color` slices a multi-colour job (OpenSCAD parts, a plate) all on one filament: no colour swaps."""
     model = ROOT / job["model"]
     p = {k: ROOT / v for k, v in job["profiles"].items()}
     if material:
@@ -155,7 +159,7 @@ def slice_job(job, per_plate=1, material=None, nozzle=None):
 
     if per_plate > 1 and model.suffix not in (".scad", ".py"):
         sys.exit("Filling the plate works for OpenSCAD and nurb models; this one is a ready-made file.")
-    out = ROOT / "gcode" / gcode_name(job, per_plate, material, nozzle)
+    out = ROOT / "gcode" / gcode_name(job, per_plate, material, nozzle, one_color)
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     plate = 0  # 0 = every plate
@@ -166,17 +170,19 @@ def slice_job(job, per_plate=1, material=None, nozzle=None):
     if parts:
         if model.suffix != ".scad":
             sys.exit("[parts] needs an OpenSCAD model (each part renders with -D part=...)")
-        rendered = [(name, render_scad(model, out / f"part-{name}.stl", {**job.get("scad", {}), "part": f'"{name}"'}), i)
-                    for i, name in enumerate(parts, 1)]
+        rendered = [(name, render_scad(model, out / f"part-{name}.stl", {**job.get("scad", {}), "part": f'"{name}"'}),
+                     1 if one_color else i) for i, name in enumerate(parts, 1)]
         model = parts3mf.write(rendered, out / "model.3mf", job["name"], copies=per_plate)
-        process, filaments = multi_filament(process, p["filament"], list(parts.values()), out)
+        if not one_color:
+            process, filaments = multi_filament(process, p["filament"], list(parts.values()), out)
     elif model.suffix in (".scad", ".py"):
         stl = (render_scad(model, out / "model.stl", job.get("scad", {})) if model.suffix == ".scad"
                else render_nurb(model, out / "model.stl", job.get("params", {})))
         model = parts3mf.write([(job["name"], stl, 1)], out / "model.3mf", job["name"], copies=per_plate)
     elif job.get("members"):
         colors = list(dict.fromkeys(hex_for(m["color"]) for m, _ in job["members"]))
-        model, plate = merge_plate(job, colors, out)
+        model, plate = merge_plate(job, colors, out, one_color)
+        colors = colors[:1] if one_color else colors
         if len(colors) > 1:
             process, filaments = multi_filament(process, p["filament"], colors, out)
     elif model.suffix == ".3mf":
@@ -206,7 +212,7 @@ def slice_job(job, per_plate=1, material=None, nozzle=None):
         print(res.stdout[-2000:], res.stderr[-2000:], sep="\n")
         sys.exit("Slicing failed (output above).")
 
-    final = ROOT / "gcode" / f"{gcode_name(job, per_plate, material, nozzle)}.gcode"
+    final = ROOT / "gcode" / f"{gcode_name(job, per_plate, material, nozzle, one_color)}.gcode"
     shutil.move(gcodes[-1], final)
     shutil.rmtree(out, ignore_errors=True)
     print(f"G-code: {final.relative_to(ROOT)}")
@@ -316,7 +322,7 @@ def single_filament(src, dest, only=None, fill_base=None):
     return dest, plate
 
 
-def merge_plate(job, colors, out):
+def merge_plate(job, colors, out, one_color=False):
     """One 3MF holding each of a plate's parts, as many times as it asks, on plate 1.
 
     Each part is prepared as when sliced on its own (single_filament: just its object,
@@ -352,7 +358,7 @@ def merge_plate(job, colors, out):
             settings = re.sub(r'(<part id=)"(\d+)"', sub_id, settings)
         own = {k: v for k, v in member.get("overrides", {}).get("process", {}).items()
                if k not in PLATE_WIDE and shared.get(k) != v}
-        extruder = colors.index(hex_for(member["color"])) + 1
+        extruder = 1 if one_color else colors.index(hex_for(member["color"])) + 1
         for _ in range(count):
             oid = str(next_id)
             next_id += 1
@@ -504,19 +510,20 @@ def main():
     ap.add_argument("--per-plate", type=int, default=1, help="lay this many out on the bed at once")
     ap.add_argument("--material", choices=sorted(MATERIALS), help="slice for this filament instead of PLA")
     ap.add_argument("--nozzle", choices=sorted(NOZZLES), help="slice for this nozzle (mm) instead of the stock 0.4")
+    ap.add_argument("--one-color", action="store_true", help="a multi-colour job all from one spool (--color)")
     a = ap.parse_args()
 
     job = load_job(a.job)
-    gcode = ROOT / "gcode" / f"{gcode_name(job, a.per_plate, a.material, a.nozzle)}.gcode"
+    gcode = ROOT / "gcode" / f"{gcode_name(job, a.per_plate, a.material, a.nozzle, a.one_color)}.gcode"
 
     if not a.no_slice:
-        gcode = slice_job(job, a.per_plate, a.material, a.nozzle)
+        gcode = slice_job(job, a.per_plate, a.material, a.nozzle, a.one_color)
     elif not gcode.exists():
         sys.exit(f"No G-code at {gcode.relative_to(ROOT)}; run without --no-slice.")
     if a.slice_only:
         return
 
-    colors = list(job["parts"].values()) if job.get("parts") else [a.color or job.get("color")]
+    colors = list(job["parts"].values()) if job.get("parts") and not a.one_color else [a.color or job.get("color")]
     if not all(colors):
         sys.exit("No color: set `color` in the job or pass --color.")
     slots = [find_slot(c) for c in colors]

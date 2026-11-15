@@ -38,6 +38,7 @@ export interface ModelJob {
   plates: { perPlate: number; stats: Stats | null; stale: boolean }[]; // slices with several on one plate
   materials: Record<Exclude<Material, "pla">, { stats: Stats | null; stale: boolean }>; // sliced for a wood-fill or silk spool
   plate: { job: string; count: number }[] | null; // a plate of the model's parts: what's on it
+  oneColor: Record<Material, { stats: Stats | null; stale: boolean }> | null; // a multi-colour job sliced for one spool
 }
 
 export interface Model { id: string; file: string | null; kind: string | null; meshKey: string; source: string; jobs: ModelJob[] }

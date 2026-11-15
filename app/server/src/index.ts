@@ -87,12 +87,12 @@ export async function start(opts: StartOptions = {}) {
     publish("models", null);
     return scadParams(getJob(job.name));
   });
-  app.post<{ Params: { job: string }; Body: { perPlate?: number; material?: string } | undefined }>("/api/jobs/:job/slice", async (req, reply) => {
+  app.post<{ Params: { job: string }; Body: { perPlate?: number; material?: string; oneColor?: boolean } | undefined }>("/api/jobs/:job/slice", async (req, reply) => {
     const job = getJob(req.params.job);
     const material = req.body?.material ?? "pla";
     if (!isMaterial(material)) return reply.status(400).send({ error: `Unknown material "${material}"` });
     if (job.plate && (req.body?.perPlate ?? 1) > 1) return reply.status(400).send({ error: "A plate is laid out already; print more of it as copies" });
-    slice(job.name, Math.max(1, Math.floor(req.body?.perPlate ?? 1)), material).catch(() => {}); // progress and failure arrive over SSE
+    slice(job.name, Math.max(1, Math.floor(req.body?.perPlate ?? 1)), material, !!req.body?.oneColor && job.parts.length > 1).catch(() => {}); // progress and failure arrive over SSE
     return reply.status(202).send({ ok: true });
   });
 

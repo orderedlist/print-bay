@@ -76,6 +76,9 @@ plate** makes one and the plate panel sets how many of each part it holds.
 3MF, gives each object the process overrides it doesn't share with the others,
 and has Orca arrange them on the bed. Parts in different colours get a filament
 each, but swap spools every layer, so a plate per colour is usually much faster.
+Pick the same spool for every part (the outside spool, say) and it slices as one
+colour with no swaps (`run.py --one-color`, `gcode/<job>-1c.gcode`); this works for
+multi-colour OpenSCAD jobs too.
 
 ## Adding a model
 

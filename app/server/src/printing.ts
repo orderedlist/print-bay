@@ -76,7 +76,7 @@ function forSlots(gcode: string, slots: moonraker.Slot[]): string {
     throw fail(`${path.basename(gcode)} uses ${Math.max(...tools) + 1} filaments but ${slots.length} colour(s) were picked; re-slice it`);
   const outside = slots.some((s) => s.slot === moonraker.OUTSIDE);
   if (outside && (slots.length > 1 || new Set(tools).size > 1))
-    throw fail("The outside spool can only feed a one-colour print; pick CFS spools for this one");
+    throw fail("The outside spool can only feed a one-colour print: pick it for every part, or CFS spools");
   const out = gcode.replace(/\.gcode$/, `-${slots.map((s) => s.slot).join("-")}.gcode`);
   fs.writeFileSync(out, outside
     ? text.replace(/^T\d+\s*\n/gm, "")
@@ -115,6 +115,9 @@ export async function print(opts: {
     return s;
   });
   const slot = slots[0];
+  // every part from the same spool: slice it as one colour, with no colour swaps (and the outside spool can feed it)
+  const oneColor = slots.length > 1 && new Set(slots.map((s) => s.slot)).size === 1;
+  const feeds = oneColor ? [slot] : slots;
   if (opts.material !== undefined && !isMaterial(opts.material)) throw fail(`Unknown material "${opts.material}"`);
   const material: Material = opts.material ?? slots.find((s) => s.material !== "pla")?.material ?? "pla";
   if (material !== "pla" && perPlate > 1) throw fail(`Several to a plate isn't set up for ${material} yet`);
@@ -122,13 +125,13 @@ export async function print(opts: {
   if (opts.startNow && !moonraker.IDLE_STATES.has(status.state))
     throw fail(`The printer is ${status.state}; add it to the queue instead`, 409);
 
-  if (isStale(job, perPlate, material)) await slice(job.name, perPlate, material);
-  const file = forSlots(gcodePath(job.name, perPlate, material), slots);
+  if (isStale(job, perPlate, material, oneColor)) await slice(job.name, perPlate, material, oneColor);
+  const file = forSlots(gcodePath(job.name, perPlate, material, undefined, oneColor), feeds);
   await moonraker.upload(file);
 
   const entries = Array.from({ length: copies }, (_, i): QueueEntry => ({
-    id: randomUUID(), job: job.name, color: colors.join(" + "), hex: slot.color,
-    ...(slots.length > 1 ? { hexes: slots.map((s) => s.color) } : {}), slot: slots.map((s) => s.slot).join(" + "),
+    id: randomUUID(), job: job.name, color: oneColor ? colors[0] : colors.join(" + "), hex: slot.color,
+    ...(feeds.length > 1 ? { hexes: feeds.map((s) => s.color) } : {}), slot: feeds.map((s) => s.slot).join(" + "),
     ...(perPlate > 1 ? { perPlate } : {}), ...(material === "pla" ? {} : { material }),
     filename: path.basename(file), copy: i + 1, of: copies,
   }));
@@ -139,7 +142,7 @@ export async function print(opts: {
   }
   state.entries.push(...entries);
   save();
-  return { started, queued: entries.length, slot: slots.map((s) => s.slot).join(" + ") };
+  return { started, queued: entries.length, slot: feeds.map((s) => s.slot).join(" + ") };
 }
 
 /** Start the next queued copy once someone confirms the bed is clear. */

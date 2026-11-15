@@ -61,6 +61,7 @@ export interface ModelJob {
   plates: { perPlate: number; stats: Stats | null; stale: boolean }[]; // sliced with several to a plate
   plate: { job: string; count: number }[] | null; // a plate of the model's parts: what's on it
   materials: Record<OtherMaterial, { stats: Stats | null; stale: boolean }>; // sliced for a wood-fill or silk spool
+  oneColor: Record<Material, { stats: Stats | null; stale: boolean }> | null; // a multi-colour job sliced for one spool
 }
 
 export interface Model {
@@ -165,11 +166,12 @@ export function cost(grams: number, secs: number, r = rates()): Cost {
  * for a spool that isn't PLA, then -<nozzle>mm for a nozzle that isn't the stock 0.4 (see
  * scripts/run.py). The nozzle is the one set in the app.
  */
-export const gcodePath = (job: string, perPlate = 1, material: Material = "pla", nozzle: Nozzle = getNozzle()) =>
-  abs(`gcode/${perPlate > 1 ? `${job}-x${perPlate}` : job}${material === "pla" ? "" : `-${material}`}${nozzle === STOCK ? "" : `-${nozzle}mm`}.gcode`);
+/** `oneColor`: a multi-colour job sliced all on one filament, for when every part comes from the same spool. */
+export const gcodePath = (job: string, perPlate = 1, material: Material = "pla", nozzle: Nozzle = getNozzle(), oneColor = false) =>
+  abs(`gcode/${perPlate > 1 ? `${job}-x${perPlate}` : job}${oneColor ? "-1c" : ""}${material === "pla" ? "" : `-${material}`}${nozzle === STOCK ? "" : `-${nozzle}mm`}.gcode`);
 
-export function gcodeStats(job: string, r = rates(), perPlate = 1, material: Material = "pla"): Stats | null {
-  const file = gcodePath(job, perPlate, material);
+export function gcodeStats(job: string, r = rates(), perPlate = 1, material: Material = "pla", oneColor = false): Stats | null {
+  const file = gcodePath(job, perPlate, material, getNozzle(), oneColor);
   if (!fs.existsSync(file)) return null;
   const size = fs.statSync(file).size;
   const fd = fs.openSync(file, "r");
@@ -186,8 +188,8 @@ export function gcodeStats(job: string, r = rates(), perPlate = 1, material: Mat
 }
 
 /** Anything the slice depends on that changed after it. */
-export function isStale(job: Job, perPlate = 1, material: Material = "pla"): boolean {
-  const sliced = mtime(gcodePath(job.name, perPlate, material));
+export function isStale(job: Job, perPlate = 1, material: Material = "pla", oneColor = false): boolean {
+  const sliced = mtime(gcodePath(job.name, perPlate, material, getNozzle(), oneColor));
   if (!sliced) return true;
   const profiles = { ...job.profiles, ...(material === "pla" ? {} : { filament: MATERIAL_PROFILES[material] }) };
   const nozzle = getNozzle();
@@ -242,6 +244,9 @@ export function listModels(): Model[] {
             .map((n) => ({ perPlate: n, stats: gcodeStats(j.name, r, n), stale: isStale(j, n) })),
           materials: Object.fromEntries(OTHER_MATERIALS.map((m) => [m, { stats: gcodeStats(j.name, r, 1, m), stale: isStale(j, 1, m) }])) as ModelJob["materials"],
           plate: j.plate ?? null,
+          oneColor: j.parts.length > 1
+            ? Object.fromEntries((["pla", ...OTHER_MATERIALS] as Material[]).map((m) => [m, { stats: gcodeStats(j.name, r, 1, m, true), stale: isStale(j, 1, m, true) }])) as ModelJob["oneColor"]
+            : null,
         })),
       };
     });

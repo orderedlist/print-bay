@@ -160,7 +160,7 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   const log = job ? live.slice[job.name] ?? [] : [];
   const slicing = !!job && (job.slicing || log.at(-1)?.state === "running");
   const [perPlate, setPerPlate] = useState(1); // copies laid out on one plate
-  const slice = () => job && api(`/api/jobs/${job.name}/slice`, { method: "POST", json: { perPlate, material } }).catch((e) => toast(e.message, true));
+  const slice = () => job && api(`/api/jobs/${job.name}/slice`, { method: "POST", json: { perPlate, material, oneColor } }).catch((e) => toast(e.message, true));
 
   // ---- parameters ----
   const [params, setParams] = useState<ScadParam[]>([]);
@@ -208,9 +208,11 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   const outside = chosenAll.some((s) => s?.slot === "EXT");
   const spoolMaterial: Material = chosenAll.find((s) => s && s.material !== "pla")?.material ?? "pla";
   const material: Material = perPlate > 1 ? "pla" : materialPick ?? spoolMaterial;
-  const sliced = material === "pla" ? job : job?.materials[material];
+  // every part from the same spool: it slices as one colour, with no swaps
+  const oneColor = multi && !!chosen && new Set(chosenAll.map((s) => s!.slot)).size === 1;
+  const sliced = oneColor ? job?.oneColor?.[material] : material === "pla" ? job : job?.materials[material];
   const stale = !!sliced?.stale;
-  const colorsText = chosenAll.map((c) => (c ? colorName(c.color).toLowerCase() : "?")).join(" and ") + (material === "pla" ? "" : ` ${material}`);
+  const colorsText = (oneColor ? chosenAll.slice(0, 1) : chosenAll).map((c) => (c ? colorName(c.color).toLowerCase() : "?")).join(" and ") + (material === "pla" ? "" : ` ${material}`);
   const idle = status ? IDLE_STATES.has(status.state) : false;
   // how many fit on one plate (OpenSCAD models: the slicer lays them out), from the size as printed
   const fit = parametric && checks ? plateFit(checks.size[0], checks.size[1], multi) : 1;
@@ -227,10 +229,10 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   // slice the plate as soon as the count settles, so the real time replaces the estimate
   const failed = log.at(-1)?.state === "failed";
   useEffect(() => {
-    if (perPlate <= 1 || exact || slicing || failed || !job) return; // after a failure, wait for "Try again"
+    if ((perPlate <= 1 && !oneColor) || exact || slicing || failed || !job) return; // after a failure, wait for "Try again"
     const t = setTimeout(slice, 1200);
     return () => clearTimeout(t);
-  }, [perPlate, !!exact, slicing]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [perPlate, oneColor, !!exact, slicing]); // eslint-disable-line react-hooks/exhaustive-deps
   const count = perPlate * copies;
   const submit = async (startNow: boolean) => {
     if (!job || !chosen) return;
@@ -422,11 +424,13 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
                       </div>
                     );
                   })}
-                  {multi && <div className="faint" style={{ fontSize: 12 }}>{job?.plate
+                  {multi && <div className="faint" style={{ fontSize: 12 }}>{oneColor
+                    ? "All from one spool: it prints as one colour, with no colour swaps."
+                    : job?.plate
                     ? "One print: the CFS swaps colour each layer, between the parts."
                     : "One print: the CFS swaps colour within each layer, so it comes off the bed as one piece."}</div>}
                   {outside && <div className="faint" style={{ fontSize: 12 }}>
-                    {multi ? "The outside spool can only feed a one-colour print." : "It prints whatever is loaded in the toolhead: load the outside spool on the printer's screen first (unloading the CFS)."}
+                    {multi && !oneColor ? "The outside spool can only feed a one-colour print: pick it for every part." : "It prints whatever is loaded in the toolhead: load the outside spool on the printer's screen first (unloading the CFS)."}
                   </div>}
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <span style={{ flexGrow: 1 }}>Material</span>
