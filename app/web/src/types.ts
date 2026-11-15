@@ -72,3 +72,18 @@ export interface AgentSession {
   cost: number;
   createdAt: number;
 }
+
+export interface RepoChange { path: string; status: "added" | "modified" | "deleted" | "renamed" | "conflict" }
+export interface Repo {
+  id: "library" | "app";
+  name: string;
+  path: string;
+  branch: string | null;
+  remote: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  lastCommit: { hash: string; subject: string; at: number } | null;
+  changes: RepoChange[];
+  suggestion: string;
+}

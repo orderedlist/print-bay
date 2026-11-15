@@ -1,21 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useLive, useModels } from "./api";
+import { useLive, useModels, useRepos } from "./api";
 import { Camera } from "./components/Camera";
 import { ICONS, Toolbar } from "./components/Toolbar";
+import { ChangesPanel } from "./screens/ChangesPanel";
 import { CreatePanel } from "./screens/CreatePanel";
 import { ModelsPanel } from "./screens/ModelsPanel";
 import { ModelWorkspace, type InspectorTab } from "./screens/ModelWorkspace";
 import { PrinterPanel, printerCaption, stateLabel } from "./screens/PrinterPanel";
 import { useTheme } from "./theme";
 
-// #/printer (the default), #/models, #/models/<id>, #/create. Older links still work.
-type Route = { left: "printer" } | { left: "models"; id: string | null } | { left: "create" };
+// #/printer (the default), #/models, #/models/<id>, #/create, #/changes. Older links still work.
+type Route = { left: "printer" } | { left: "models"; id: string | null } | { left: "create" } | { left: "changes" };
 
 function parseRoute(hash: string): Route {
   const [, screen, id] = hash.split("/");
   if (screen === "models" || screen === "model") return { left: "models", id: id ? decodeURIComponent(id) : null };
   if (screen === "library") return { left: "models", id: null };
   if (screen === "create" || screen === "new") return { left: "create" };
+  if (screen === "changes") return { left: "changes" };
   return { left: "printer" };
 }
 
@@ -38,6 +40,8 @@ function useNarrow() {
 export function App() {
   const live = useLive();
   const models = useModels(live.modelsVersion);
+  const [repos, setRepos] = useRepos(live.modelsVersion);
+  const changed = repos?.reduce((n, r) => n + r.changes.length, 0) ?? 0;
   const [theme, toggleTheme] = useTheme();
   const narrow = useNarrow();
   const [route, setRoute] = useState<Route>(() => parseRoute(location.hash));
@@ -93,7 +97,10 @@ export function App() {
         ) : (
           <>
             <div className="stage-hint">
-              {route.left === "create" ? (
+              {route.left === "changes" ? (
+                <><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><circle cx="6" cy="6" r="2.5" /><circle cx="6" cy="18" r="2.5" /><circle cx="18" cy="8" r="2.5" /><path d="M6 8.5v7M18 10.5c0 4-6 3-11 5.5" /></svg>
+                  <b>Commit and push your changes</b><span style={{ fontSize: 12 }}>Models and settings in the library, code in the app</span></>
+              ) : route.left === "create" ? (
                 <><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" /></svg>
                   <b>Describe the part to Claude</b><span style={{ fontSize: 12 }}>It shows up here once it's drawn</span></>
               ) : selectedId && models ? (
@@ -139,8 +146,12 @@ export function App() {
           </div>
           <div className="seg" role="tablist" aria-label="Section">
             <button role="tab" aria-selected={route.left === "printer"} onClick={() => go("/printer")}>Printer</button>
-            <button role="tab" aria-selected={route.left !== "printer"}
+            <button role="tab" aria-selected={route.left === "models" || route.left === "create"}
               onClick={() => go(selectedId ? `/models/${encodeURIComponent(selectedId)}` : "/models")}>Models</button>
+            <button role="tab" aria-selected={route.left === "changes"} onClick={() => go("/changes")}
+              aria-label={changed ? `Changes, ${changed} uncommitted` : "Changes"}>
+              Changes{changed > 0 && <span className="badge-n" style={{ marginLeft: 6 }}>{changed > 99 ? "99+" : changed}</span>}
+            </button>
           </div>
         </div>
         <div className="panel-body">
@@ -148,6 +159,8 @@ export function App() {
             <div className="sec muted">Loading…</div>
           ) : route.left === "printer" ? (
             <PrinterPanel live={live} models={models} toast={toast} openModel={openModel} />
+          ) : route.left === "changes" ? (
+            repos ? <ChangesPanel repos={repos} setRepos={setRepos} toast={toast} /> : <div className="sec muted">Loading…</div>
           ) : (
             <ModelsPanel ref={search} models={models} selected={selectedId} open={openModel} create={() => go("/create")} />
           )}

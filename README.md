@@ -93,6 +93,18 @@ with the K2 profiles from `profiles/` and the rates from `costs.toml`. Set
 `setup.py`, `scripts/nurb` and Claude's tools, and Claude chats run inside the
 library.
 
+### Changes (git)
+
+The library and the app's code are each a git repo, and the **Changes** tab
+commits and pushes them. A new library becomes a repo on first run, ignoring
+`gcode/` and `.cache/`. Commit takes everything that changed (`git add -A`),
+with a suggested message like "Update tote-rack". Push uses your own git
+sign-in (SSH key or credential helper) and never prompts, so push once from a
+terminal if it can't sign in. Without a remote, the tab asks for one, and only
+the computer running Print Bay can set it. In a checkout that is its own
+library, the library and the app are one repo. There's no Pull yet: if the
+remote has commits this copy doesn't, run `git pull` in a terminal.
+
 ### Claude
 
 **Edit with Claude** (on an OpenSCAD model) and **New model** (in the Library)

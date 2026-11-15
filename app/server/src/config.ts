@@ -42,6 +42,7 @@ export const CLAUDE = process.env.CLAUDE ?? firstExisting(
   "/opt/homebrew/bin/claude",
   "claude",
 );
+export const GIT = process.env.GIT ?? firstExisting("/usr/bin/git", "/opt/homebrew/bin/git", "git");
 export const PYTHON = process.env.PYTHON ?? firstExisting(path.join(APP_ROOT, ".venv/bin/python"), "python3");
 // nurb parts (Python/build123d) build with nurb's own environment, which the nurb app installs
 const NURB_ENV = path.join(process.env.HOME ?? "", "Library/Application Support/dev.nurb.desktop/env/bin");

@@ -14,11 +14,13 @@ import * as moonraker from "./moonraker.js";
 import { getQueue, print, removeEntry, startNext } from "./printing.js";
 import { isSlicing, slice } from "./slice.js";
 import * as agent from "./agent.js";
+import * as repos from "./repos.js";
 
 export interface StartOptions { port?: number; host?: string; quiet?: boolean }
 
 export async function start(opts: StartOptions = {}) {
   const app = Fastify({ logger: !opts.quiet && { level: "warn" } });
+  await repos.ensureLibraryRepo().catch((e) => console.warn(`Couldn't make the library a git repo: ${e.message}`));
   let status = await moonraker.getStatus();
 
   const poll = setInterval(async () => {
@@ -114,6 +116,17 @@ export async function start(opts: StartOptions = {}) {
     // an uploaded SVG could carry script: never let it run if opened directly
     if (ext === "svg+xml") reply.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:");
     return reply.type(`image/${ext}`).header("Cache-Control", "max-age=86400").send(fs.createReadStream(file));
+  });
+
+  // ---- git: the library and the app's code ----
+  app.get("/api/repos", async () => repos.listRepos());
+  app.post<{ Params: { id: string }; Body: { message: string } }>("/api/repos/:id/commit", async (req) =>
+    repos.commit(req.params.id, req.body?.message ?? ""));
+  app.post<{ Params: { id: string } }>("/api/repos/:id/push", async (req) => repos.push(req.params.id));
+  app.put<{ Params: { id: string }; Body: { url: string } }>("/api/repos/:id/remote", async (req, reply) => {
+    // where pushes go: only from this computer, not from anything else on the network
+    if (!/^(127\.|::1$|::ffff:127\.)/.test(req.ip)) return reply.status(403).send({ error: "Change the remote from the computer running Print Bay" });
+    return repos.setRemote(req.params.id, req.body?.url ?? "");
   });
 
   // ---- live events ----
