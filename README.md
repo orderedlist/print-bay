@@ -1,7 +1,7 @@
 # 3d-prints
 
 Models, slicer profiles, and scripts for printing on the Creality K2 Combo
-(Moonraker at `192.168.4.81:7125`).
+(Moonraker at `192.168.4.42:7125`).
 
 ```
 models/<name>/      downloaded .3mf/.stl + SOURCE.md (link, license)
@@ -9,7 +9,8 @@ profiles/           OrcaSlicer presets exported as JSON
 jobs/<name>.toml    model + profiles + copy count
 scripts/setup.py    install Orca, fetch the model, build profiles
 scripts/k2.py       printer CLI (status, upload, print, watch, pause...)
-scripts/run.py      slice a job with OrcaSlicer, then print it
+scripts/run.py      slice a job (through scripts/slice), then print it
+scripts/slice       Print Bay's slicer from the terminal (app/server/src/slicer.ts)
 app/                Print Bay: desktop/web app for the printer and the models
 costs.toml          filament and power rates for the app's cost estimates
 gcode/              sliced output (git-ignored)
@@ -25,8 +26,9 @@ python scripts/k2.py info
 python scripts/setup.py jobs/stacking-box.toml
 ```
 
-Needs Python 3.11+ (for `tomllib`) and OrcaSlicer. If Orca isn't in
-`/Applications`, set `ORCA=/path/to/OrcaSlicer`.
+Needs Python 3.11+ (for `tomllib`), OrcaSlicer, and the app built once
+(`cd app && npm install && npm run build`): `run.py` slices with the app's
+slicer. If Orca isn't in `/Applications`, set `ORCA=/path/to/OrcaSlicer`.
 
 ## Profiles
 
@@ -39,6 +41,46 @@ Or set up the K2 printer, your PLA, and a process preset (0.2mm, 2 walls,
 Orca stores them as JSON in
 `~/Library/Application Support/OrcaSlicer/user/default/{machine,process,filament}/`.
 Copy them into `profiles/` with the names the job file uses.
+
+`profiles/k2-machine.json` purges 5 mm in from the bed's left and front
+edges; Orca's stock K2 start G-code purges right on them, where the nozzle
+snagged and the motors stalled. Keep that edit if you rebuild it with
+`setup.py --force`.
+
+Wood-fill spools (CR-Wood) slice with `profiles/k2-wood.json` in place of the
+job's filament profile: Orca's "CR-Wood @K2 Plus-all" at 210 °C (215 °C first
+layer), 10 mm³/s (walls slow to about 110 mm/s) and 1 mm retraction, so it
+strings less. It leaves chamber control off: Orca's preset sends `M191 S35`,
+and on the K2 (no chamber heater) that switches the exhaust fan on at full speed
+once the chamber passes 35 °C, partway up the print, leaving a line around it.
+`run.py --material wood` writes `gcode/<job>-wood.gcode`; in the
+app, the print panel's Material switch picks it, and it defaults to Wood when
+the printer has the picked slot set to CR-Wood.
+
+Silk PLA works the same way with `profiles/k2-silk.json` (Orca's "Creality
+Generic PLA Silk @K2-all"): the job's PLA with flow capped at 10 mm³/s, so the
+walls print slower and keep their sheen. `--material silk` writes
+`gcode/<job>-silk.gcode`, and the app picks Silk when the slot is set to
+Generic PLA-Silk or CR-Silk.
+
+For a 0.6 mm nozzle, `run.py --nozzle 0.6` slices with
+`profiles/k2-machine-0.6.json` (Orca's "Creality K2 0.6 nozzle", with the same
+purge-line edit) and lays `profiles/k2-nozzle-0.6.json` over the job's process:
+the line widths and speeds of Orca's "0.30mm Standard @Creality K2 0.6 nozzle".
+Layer heights stay the job's. It writes `gcode/<job>-0.6mm.gcode` (after any
+`-wood`). The printer doesn't report a nozzle swap, so in the app set it under
+Nozzle size in the printer panel; every slice and print follows it.
+
+A plate (`plates/<name>.toml`) prints several parts of a downloaded 3MF at once:
+Plant 3, Plant 6 and two funnels, say. On a multi-part model's page, **+ New
+plate** makes one and the plate panel sets how many of each part it holds.
+The slicer copies each part's object (with its fill_base and modifiers) into one
+3MF, gives each object the process overrides it doesn't share with the others,
+and has Orca arrange them on the bed. Parts in different colours get a filament
+each, but swap spools every layer, so a plate per colour is usually much faster.
+Pick the same spool for every part (the outside spool, say) and it slices as one
+colour with no swaps (`run.py --one-color`, `gcode/<job>-1c.gcode`); this works for
+multi-colour OpenSCAD jobs too.
 
 ## Adding a model
 
@@ -78,10 +120,11 @@ npm run dev         # server with reload + Vite on :5173
 ```
 
 `app/server` (Fastify) talks to Moonraker and the library and slices with
-OrcaSlicer's CLI (`slicer.ts`, a port of `run.py`'s slicing, so the app needs
-no Python); `app/web` is the React UI; `app/desktop` runs the server inside
-Electron. The terminal scripts above keep their own Python copy of the
-slicing, so a change to how jobs slice goes in both.
+OrcaSlicer's CLI (`slicer.ts`: rendering, materials, nozzles, plates, base
+fills, one-colour slices), so the app needs no Python. It's the only slicer:
+`scripts/slice` runs it from the terminal and `run.py` slices through that, so
+changes to how jobs slice go in `slicer.ts`. `app/web` is the React UI;
+`app/desktop` runs the server inside Electron.
 
 ### Building the Mac app
 
@@ -124,7 +167,7 @@ library's `settings.json`, which git never commits. Environment variables
 still win: `K2_HOST`, `ORCA`, `OPENSCAD`, `CLAUDE`, `GIT`,
 `NURB_PYTHON`, plus `PORT`, `BIND` and `PRINT_BAY_DATA`. A checkout that is
 its own library (like this repo) skips setup and keeps its old printer
-address (192.168.4.81). Only the computer running Print Bay can change settings.
+address (192.168.4.42). Only the computer running Print Bay can change settings.
 
 ### Library
 

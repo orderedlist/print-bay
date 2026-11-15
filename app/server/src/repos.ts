@@ -126,7 +126,7 @@ function suggest(changes: RepoChange[]): string {
   const models = new Map<string, Set<RepoChange["status"]>>();
   const other: string[] = [];
   for (const c of changes) {
-    const m = c.path.match(/^(?:models|jobs)\/([^/]+?)(?:\.toml)?(?:\/|$)/);
+    const m = c.path.match(/^(?:models|jobs|plates)\/([^/]+?)(?:\.toml)?(?:\/|$)/);
     if (m) { const s = models.get(m[1]) ?? new Set(); s.add(c.status); models.set(m[1], s); }
     else other.push(path.basename(c.path));
   }

@@ -1,0 +1,12 @@
+#!/bin/zsh
+# Slice a job the way Print Bay does (app/server/dist/slice-cli.js); prints the G-code's path:
+#   scripts/slice jobs/tote-rack.toml [--per-plate 4] [--material wood] [--nozzle 0.6] [--one-color]
+# scripts/run.py slices through this. Needs the app built (cd app && npm run build).
+set -e
+root=${0:A:h:h}
+cli="$root/app/server/dist/slice-cli.js"
+[[ -f $cli ]] || { print -u2 "Build the app first: cd $root/app && npm install && npm run build"; exit 1; }
+if [[ -n $PRINT_BAY_NODE ]]; then
+  ELECTRON_RUN_AS_NODE=1 exec "$PRINT_BAY_NODE" "$cli" "$@"
+fi
+exec node "$cli" "$@"

@@ -4,6 +4,7 @@ import path from "node:path";
 import { parse } from "smol-toml";
 import { execFileSync } from "node:child_process";
 import { APP_ROOT, DATA, NURB_PYTHON } from "./config.js";
+import { getNozzle, NOZZLE_PROFILES, STOCK, type Nozzle } from "./nozzle.js";
 
 export const COLORS: Record<string, string> = {
   black: "#000000", white: "#FFFFFF", grey: "#808080", gray: "#808080",
@@ -22,6 +23,14 @@ export interface Job {
   scad: Record<string, string>;
   /** Multi-colour OpenSCAD jobs: each part renders with -D part="<name>" and prints on filament 1, 2, ... in order. */
   parts: { name: string; color: string }[];
+  /** A downloaded 3MF holding several parts: the object this job prints (see slicer.ts). */
+  object?: string;
+  /** What the model page's part picker calls this job. */
+  label?: string;
+  /** A solid disc added under the object when slicing, filling a logo pressed into its base (see slicer.ts). */
+  fillBase?: { radius: number; height: number };
+  /** A plate (plates/<name>.toml): other jobs' parts printed together, each this many times. */
+  plate?: { job: string; count: number }[];
 }
 
 export const hexFor = (color: string) => COLORS[color.toLowerCase()] ?? (color.startsWith("#") ? color : `#${color}`);
@@ -29,6 +38,16 @@ export const hexFor = (color: string) => COLORS[color.toLowerCase()] ?? (color.s
 export interface Rates { filament_per_kg: number; printer_watts: number; power_per_kwh: number }
 export interface Cost { filament: number; power: number; total: number }
 export interface Stats { time: string; seconds: number; grams: number; cost: Cost; slicedAt: number }
+
+/**
+ * What a spool is made of, as far as slicing cares: plain PLA uses the job's own filament
+ * profile; the others swap in their own (MATERIAL_PROFILES below; slicer.ts swaps them in).
+ */
+export type Material = "pla" | "wood" | "silk";
+export type OtherMaterial = Exclude<Material, "pla">;
+export const MATERIAL_PROFILES: Record<OtherMaterial, string> = { wood: "profiles/k2-wood.json", silk: "profiles/k2-silk.json" };
+const OTHER_MATERIALS = Object.keys(MATERIAL_PROFILES) as OtherMaterial[];
+export const isMaterial = (m: unknown): m is Material => m === "pla" || (typeof m === "string" && m in MATERIAL_PROFILES);
 
 export interface ModelJob {
   name: string;
@@ -40,6 +59,9 @@ export interface ModelJob {
   stats: Stats | null;
   stale: boolean; // model, job or profiles changed since the last slice
   plates: { perPlate: number; stats: Stats | null; stale: boolean }[]; // sliced with several to a plate
+  plate: { job: string; count: number }[] | null; // a plate of the model's parts: what's on it
+  materials: Record<OtherMaterial, { stats: Stats | null; stale: boolean }>; // sliced for a wood-fill or silk spool
+  oneColor: Record<Material, { stats: Stats | null; stale: boolean }> | null; // a multi-colour job sliced for one spool
 }
 
 export interface Model {
@@ -55,6 +77,11 @@ const abs = (rel: string) => path.join(DATA, rel);
 const mtime = (file: string) => (fs.existsSync(file) ? fs.statSync(file).mtimeMs : 0);
 
 export function listJobs(): Job[] {
+  const jobs = readJobs();
+  return [...jobs, ...readPlates(jobs)];
+}
+
+function readJobs(): Job[] {
   const dir = abs("jobs");
   return fs.readdirSync(dir).filter((f) => f.endsWith(".toml")).sort().map((f) => {
     const data = parse(fs.readFileSync(path.join(dir, f), "utf8")) as any;
@@ -68,8 +95,48 @@ export function listJobs(): Job[] {
       // parameter overrides: [scad] for OpenSCAD (-D), [params] for nurb parts (keyword arguments)
       scad: Object.fromEntries(Object.entries((String(data.model).endsWith(".py") ? data.params : data.scad) ?? {}).map(([k, v]) => [k, String(v)])),
       parts: Object.entries(data.parts ?? {}).map(([name, color]) => ({ name, color: String(color) })),
+      object: data.object,
+      label: data.label,
+      fillBase: data.fill_base ? { radius: Number(data.fill_base.radius), height: Number(data.fill_base.height) } : undefined,
     };
   });
+}
+
+/**
+ * Plates (plates/*.toml, sliced by slicer.ts): a job made of other jobs' parts. It takes the
+ * first part's model and profiles; one colour prints as that colour, several as parts named
+ * by what uses each (filament 1, 2, ... in the order they first appear, as slicer.ts assigns them).
+ */
+function readPlates(jobs: Job[]): Job[] {
+  const dir = abs("plates");
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((f) => f.endsWith(".toml")).sort().flatMap((f): Job[] => {
+    const data = parse(fs.readFileSync(path.join(dir, f), "utf8")) as any;
+    const plate = Object.entries(data.plate ?? {}).map(([job, count]) => ({ job, count: Number(count) }));
+    const members = plate.filter((p) => p.count > 0).map((p) => ({ ...p, of: jobs.find((j) => j.name === p.job) }));
+    const first = members.find((m) => m.of)?.of;
+    if (!first) return []; // its parts are gone
+    const colors = new Map<string, string[]>();
+    for (const m of members) if (m.of) {
+      const hex = hexFor(m.of.color ?? "");
+      colors.set(hex, [...(colors.get(hex) ?? []), m.of.label ?? m.of.name]);
+    }
+    return [{
+      name: data.name, file: `plates/${f}`, model: first.model, copies: 1, profiles: first.profiles, scad: {},
+      label: data.label, plate,
+      ...(colors.size > 1
+        ? { parts: [...colors].map(([color, names]) => ({ name: names.join(", "), color })) }
+        : { parts: [], color: [...colors.keys()][0] }),
+    }];
+  });
+}
+
+/** Write a plate's contents (job name -> count), creating plates/<name>.toml if it's new. */
+export function writePlate(name: string, label: string, counts: Record<string, number>) {
+  fs.mkdirSync(abs("plates"), { recursive: true });
+  const lines = Object.entries(counts).filter(([, n]) => n > 0).map(([job, n]) => `${job} = ${n}`);
+  fs.writeFileSync(abs(`plates/${name}.toml`),
+    `# A plate of parts, made in Print Bay (see "A plate" in scripts/run.py).\nname  = ${JSON.stringify(name)}\nlabel = ${JSON.stringify(label)}\n\n[plate]\n${lines.join("\n")}\n`);
 }
 
 export function getJob(name: string): Job {
@@ -94,11 +161,17 @@ export function cost(grams: number, secs: number, r = rates()): Cost {
   return { filament: round(filament), power: round(power), total: round(filament + power) };
 }
 
-/** gcode/<job>.gcode, or gcode/<job>-x<n>.gcode for n laid out on one plate (see scripts/run.py). */
-export const gcodePath = (job: string, perPlate = 1) => abs(`gcode/${perPlate > 1 ? `${job}-x${perPlate}` : job}.gcode`);
+/**
+ * gcode/<job>.gcode, gcode/<job>-x<n>.gcode for n laid out on one plate, then -<material>
+ * for a spool that isn't PLA, then -<nozzle>mm for a nozzle that isn't the stock 0.4 (slicer.ts
+ * and scripts/slice use this too). The nozzle is the one set in the app unless given.
+ */
+/** `oneColor`: a multi-colour job sliced all on one filament, for when every part comes from the same spool. */
+export const gcodePath = (job: string, perPlate = 1, material: Material = "pla", nozzle: Nozzle = getNozzle(), oneColor = false) =>
+  abs(`gcode/${perPlate > 1 ? `${job}-x${perPlate}` : job}${oneColor ? "-1c" : ""}${material === "pla" ? "" : `-${material}`}${nozzle === STOCK ? "" : `-${nozzle}mm`}.gcode`);
 
-export function gcodeStats(job: string, r = rates(), perPlate = 1): Stats | null {
-  const file = gcodePath(job, perPlate);
+export function gcodeStats(job: string, r = rates(), perPlate = 1, material: Material = "pla", oneColor = false): Stats | null {
+  const file = gcodePath(job, perPlate, material, getNozzle(), oneColor);
   if (!fs.existsSync(file)) return null;
   const size = fs.statSync(file).size;
   const fd = fs.openSync(file, "r");
@@ -115,11 +188,22 @@ export function gcodeStats(job: string, r = rates(), perPlate = 1): Stats | null
 }
 
 /** Anything the slice depends on that changed after it. */
-export function isStale(job: Job, perPlate = 1): boolean {
-  const sliced = mtime(gcodePath(job.name, perPlate));
+export function isStale(job: Job, perPlate = 1, material: Material = "pla", oneColor = false): boolean {
+  const sliced = mtime(gcodePath(job.name, perPlate, material, getNozzle(), oneColor));
   if (!sliced) return true;
-  const inputs = [job.model, job.file, ...Object.values(job.profiles)].map((p) => mtime(abs(p)));
+  const profiles = { ...job.profiles, ...(material === "pla" ? {} : { filament: MATERIAL_PROFILES[material] }) };
+  const nozzle = getNozzle();
+  const parts = (job.plate ?? []).map((p) => listJobs().find((j) => j.name === p.job)).filter((j): j is Job => !!j)
+    .flatMap((j) => [j.file, j.model]); // a plate: its parts' jobs and models too
+  const inputs = [job.model, job.file, ...parts, ...Object.values(profiles), ...NOZZLE_PROFILES[nozzle]].map((p) => mtime(abs(p)));
   return inputs.some((t) => t > sliced);
+}
+
+/** Labelled jobs in natural order ("Plant 2" before "Plant 10"), numbered ones before the rest; unlabelled keep their file order. */
+function byLabel(a: Job, b: Job): number {
+  if (!a.label || !b.label) return 0;
+  const numbered = (l: string) => (/\d/.test(l) ? 0 : 1);
+  return numbered(a.label) - numbered(b.label) || a.label.localeCompare(b.label, undefined, { numeric: true });
 }
 
 export function listModels(): Model[] {
@@ -134,7 +218,8 @@ export function listModels(): Model[] {
         const hit = files.find((f) => f.endsWith(ext));
         if (hit) { mesh = `models/${id}/${hit}`; break; }
       }
-      const modelJobs = jobs.filter((j) => j.model.startsWith(`models/${id}/`)); // the model file may sit deeper (a nurb part in parts/)
+      const modelJobs = jobs.filter((j) => j.model.startsWith(`models/${id}/`)) // the model file may sit deeper (a nurb part in parts/)
+        .sort(byLabel); // a multi-part model's picker order; its first job is the default and the thumbnail
       if (modelJobs[0]) mesh = modelJobs[0].model;
       const sourceFile = path.join(dir, id, "SOURCE.md");
       return {
@@ -145,6 +230,7 @@ export function listModels(): Model[] {
         source: fs.existsSync(sourceFile) ? fs.readFileSync(sourceFile, "utf8") : "",
         jobs: modelJobs.map((j) => ({
           name: j.name,
+          label: j.label ?? null,
           file: j.file,
           color: j.color ?? null,
           hex: j.parts[0] ? hexFor(j.parts[0].color) : j.color ? hexFor(j.color) : null,
@@ -156,6 +242,11 @@ export function listModels(): Model[] {
             .map((f) => f.match(new RegExp(`^${j.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-x(\\d+)\\.gcode$`))?.[1])
             .filter((n): n is string => !!n).map(Number).sort((a, b) => a - b)
             .map((n) => ({ perPlate: n, stats: gcodeStats(j.name, r, n), stale: isStale(j, n) })),
+          materials: Object.fromEntries(OTHER_MATERIALS.map((m) => [m, { stats: gcodeStats(j.name, r, 1, m), stale: isStale(j, 1, m) }])) as ModelJob["materials"],
+          plate: j.plate ?? null,
+          oneColor: j.parts.length > 1
+            ? Object.fromEntries((["pla", ...OTHER_MATERIALS] as Material[]).map((m) => [m, { stats: gcodeStats(j.name, r, 1, m, true), stale: isStale(j, 1, m, true) }])) as ModelJob["oneColor"]
+            : null,
         })),
       };
     });

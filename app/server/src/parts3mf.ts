@@ -1,5 +1,5 @@
 // Pack separately rendered parts into one OrcaSlicer object, one filament per part
-// (ported from scripts/parts3mf.py, which the terminal scripts still use).
+// (ported from the old scripts/parts3mf.py).
 //
 // OrcaSlicer only gives different parts different filaments when they are parts
 // (volumes) of a single object, which is how its own 3MF projects store them: each

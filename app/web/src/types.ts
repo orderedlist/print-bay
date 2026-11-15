@@ -1,6 +1,11 @@
 // Mirrors of the server's API shapes (app/server/src). Keep in sync by hand.
 
-export interface Slot { slot: string; tool: number; color: string; remain: number }
+/** What a spool is made of, as far as slicing cares (the printer's setting for the slot). */
+export type Material = "pla" | "wood" | "silk";
+export const MATERIAL_NAMES: Record<Material, string> = { pla: "PLA", wood: "Wood", silk: "Silk" };
+/** A spool the printer reports: a CFS slot (T1A..T4D), or "EXT", the holder outside it (remain unknown). */
+export interface Slot { slot: string; tool: number; color: string; remain: number | null; material: Material }
+export const slotName = (slot: string) => (slot === "EXT" ? "outside spool" : slot);
 
 export interface PrinterStatus {
   online: boolean;
@@ -21,6 +26,7 @@ export interface Stats { time: string; seconds: number; grams: number; cost: Cos
 
 export interface ModelJob {
   name: string;
+  label: string | null; // a part of a multi-part model, as its picker shows it ("Plant 3")
   file: string;
   color: string | null;
   hex: string | null;
@@ -30,6 +36,9 @@ export interface ModelJob {
   stale: boolean;
   slicing: boolean;
   plates: { perPlate: number; stats: Stats | null; stale: boolean }[]; // slices with several on one plate
+  materials: Record<Exclude<Material, "pla">, { stats: Stats | null; stale: boolean }>; // sliced for a wood-fill or silk spool
+  plate: { job: string; count: number }[] | null; // a plate of the model's parts: what's on it
+  oneColor: Record<Material, { stats: Stats | null; stale: boolean }> | null; // a multi-colour job sliced for one spool
 }
 
 export interface Model { id: string; file: string | null; kind: string | null; meshKey: string; source: string; jobs: ModelJob[] }
@@ -37,7 +46,7 @@ export interface Model { id: string; file: string | null; kind: string | null; m
 export interface ScadParam { name: string; default: string; value: string; comment: string }
 
 export interface QueueEntry {
-  id: string; job: string; color: string; hex: string; hexes?: string[]; slot: string; perPlate?: number; filename: string; copy: number; of: number;
+  id: string; job: string; color: string; hex: string; hexes?: string[]; slot: string; material?: Material; perPlate?: number; filename: string; copy: number; of: number;
 }
 export interface QueueState { active: QueueEntry | null; entries: QueueEntry[] }
 

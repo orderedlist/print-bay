@@ -21,7 +21,7 @@ function chosenLibrary(): string | null {
 }
 
 /**
- * The user's library: models/, jobs/, profiles/, gcode/, costs.toml and the app's cache.
+ * The user's library: models/, jobs/, plates/, profiles/, gcode/, costs.toml and the app's cache.
  * PRINT_BAY_DATA, else the folder chosen in Settings, else a checkout with its own jobs/
  * (it keeps using itself), else a folder of the user's own.
  */
@@ -70,9 +70,9 @@ export function writeSettings(next: Settings): void {
 /** The K2's name on the local network (Bonjour), used until an address is saved in Settings. */
 export const DEFAULT_PRINTER = "k2.local:7125";
 /** A checkout that is its own library predates settings: it keeps the printer it always used. */
-const LEGACY_PRINTER = DATA === path.resolve(APP_ROOT) ? "192.168.4.81:7125" : null;
+const LEGACY_PRINTER = DATA === path.resolve(APP_ROOT) ? "192.168.4.42:7125" : null;
 
-/** "192.168.4.81" or "k2.local:7125" (Moonraker's port is 7125 unless given). */
+/** "192.168.4.42" or "k2.local:7125" (Moonraker's port is 7125 unless given). */
 export function normalizeHost(input: string): string {
   const h = input.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
   if (!/^[A-Za-z0-9.-]+(:\d{1,5})?$/.test(h)) throw Object.assign(new Error("Use the printer's IP address or host name, like 192.168.1.50"), { statusCode: 400 });
@@ -148,7 +148,7 @@ export function applySettings(): void {
 
 /** A new library starts empty, with the K2 profiles and default rates the app ships with. Safe to run again. */
 export function seedLibrary(): void {
-  for (const dir of ["models", "jobs", "profiles", "gcode"]) fs.mkdirSync(path.join(DATA, dir), { recursive: true });
+  for (const dir of ["models", "jobs", "plates", "profiles", "gcode"]) fs.mkdirSync(path.join(DATA, dir), { recursive: true });
   if (!fs.existsSync(path.join(DATA, "costs.toml"))) fs.copyFileSync(path.join(APP_ROOT, "costs.toml"), path.join(DATA, "costs.toml"));
   for (const f of fs.readdirSync(path.join(APP_ROOT, "profiles")).filter((f) => f.endsWith(".json")))
     if (!fs.existsSync(path.join(DATA, "profiles", f))) fs.copyFileSync(path.join(APP_ROOT, "profiles", f), path.join(DATA, "profiles", f));

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, colorName, duration, jobFromFilename, title, type Live } from "../api";
 import { Thumb } from "../components/Thumb";
 import { IDLE_STATES, type Model } from "../types";
@@ -38,6 +38,8 @@ export function PrinterPanel({ live, models, toast, openModel }: Props) {
   const { status, queue } = live;
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [nozzle, setNozzle] = useState<string | null>(null); // mm; set here, since the printer doesn't report a swap
+  useEffect(() => { api<{ nozzle: string }>("/api/printer").then((p) => setNozzle(p.nozzle)).catch(() => {}); }, []);
 
   const act = async (fn: () => Promise<unknown>, done?: string) => {
     setBusy(true);
@@ -100,17 +102,28 @@ export function PrinterPanel({ live, models, toast, openModel }: Props) {
             </div>
           ))}
         </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
+          <span style={{ flexGrow: 1 }}>Nozzle size</span>
+          <div className="seg seg-sm" role="radiogroup" aria-label="Nozzle size" style={{ flex: "none" }}>
+            {["0.4", "0.6"].map((n) => (
+              <button key={n} role="radio" aria-checked={nozzle === n} disabled={busy || nozzle === null} style={{ padding: "0 10px" }}
+                onClick={() => nozzle !== n && act(async () => { await api("/api/printer/nozzle", { method: "PUT", json: { nozzle: n } }); setNozzle(n); },
+                  `Slicing for the ${n} mm nozzle from now on.`)}>{n} mm</button>
+            ))}
+          </div>
+        </div>
+        <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>Set this when you swap the nozzle: prints are sliced for it.</div>
       </div>
 
       <div className="sec">
-        <div className="sech">Filament · CFS</div>
+        <div className="sech">Filament</div>
         <div className="sec-body" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {status?.slots.length ? status.slots.map((s) => (
             <div key={s.slot} style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span className="dot" style={{ width: 14, height: 14, background: s.color, boxShadow: "0 0 0 1px var(--line) inset" }} />
               <span style={{ flexGrow: 1 }}>{colorName(s.color)}</span>
-              <span className="mono faint">{s.slot}</span>
-              <span className="mono muted" style={{ width: 40, textAlign: "right" }}>{s.remain}%</span>
+              <span className="mono faint">{s.slot === "EXT" ? "Outside" : s.slot}</span>
+              <span className="mono muted" style={{ width: 40, textAlign: "right" }}>{s.remain === null ? "—" : `${s.remain}%`}</span>
             </div>
           )) : <div className="muted">No spools reported.</div>}
         </div>

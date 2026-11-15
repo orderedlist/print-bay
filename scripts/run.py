@@ -8,6 +8,9 @@ run.py - slice a job with OrcaSlicer's CLI, then print it on the K2.
   python scripts/run.py jobs/stacking-box.toml --copies 1   # override copy count
   python scripts/run.py jobs/stacking-box.toml --color red  # override the job's color
   python scripts/run.py jobs/ball-marker.toml --per-plate 20 # 20 on the bed at once (OpenSCAD jobs)
+  python scripts/run.py jobs/succulent-pot-3.toml --material wood # wood-fill spool: gcode/<job>-wood.gcode (or silk)
+  python scripts/run.py jobs/succulent-pot-3.toml --nozzle 0.6     # 0.6 mm nozzle: gcode/<job>-0.6mm.gcode
+  python scripts/run.py plates/succulent-fruit-fly-trap-plate-3.toml --one-color # every part from one spool: -1c
 
 A job prints in its `color` (a name like "black" or a hex code) from whichever
 CFS slot holds it. A multi-colour OpenSCAD job lists its parts instead:
@@ -21,26 +24,39 @@ together layer by layer and come off the bed as one piece. Each layer starts
 with the first part listed, so list what should go down first (a face-down
 inlay) first.
 
-Set ORCA to your OrcaSlicer binary if it isn't at the macOS default.
+A downloaded .3mf holding several parts (a plant and its pot, in different
+colours) gets a job per part: `object = "Funnel"` slices just the object of that
+name, on the plate the file puts it on. `fill_base = { radius = 25, height = 0.6 }`
+also fills the bottom that far up within that radius of the object's middle,
+smoothing away a logo pressed into its base.
+
+A plate (plates/<name>.toml) prints several of those parts at once, each with
+its own settings and colour, laid out by Orca:
+
+  name  = "succulent-plate-1"
+  label = "Plate 1"
+  [plate]                       # job name = how many
+  succulent-plant-3 = 1
+  succulent-funnel  = 2
+
+Slicing is Print Bay's (scripts/slice, app/server/src/slicer.ts), so build the app once
+(cd app && npm install && npm run build). Set ORCA to your OrcaSlicer binary if it isn't
+at the macOS default.
 """
 import os
 import re
 import sys
 import time
-import shutil
 import argparse
 import subprocess
-import json
 import tomllib
-import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import k2  # noqa: E402
-import parts3mf  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent  # the app: scripts/
-# the library (models/, jobs/, profiles/, gcode/), as the app finds it: PRINT_BAY_DATA, else the
+ROOT = Path(__file__).resolve().parent.parent  # the app: scripts/, app/
+# the library (models/, jobs/, plates/, profiles/, gcode/), as the app finds it: PRINT_BAY_DATA, else the
 # folder chosen in Print Bay's Settings, else this checkout if it has jobs/, else the standard place
 SUPPORT = Path.home() / "Library/Application Support/Print Bay"
 
@@ -55,11 +71,7 @@ def find_library():
 
 
 DATA = find_library().resolve()
-ORCA = os.environ.get("ORCA", "/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer")
-OPENSCAD = os.environ.get("OPENSCAD", "openscad")
-# nurb parts (.py) build in nurb's own environment, which the nurb app installs
-NURB_PYTHON = os.environ.get(
-    "NURB_PYTHON", str(Path.home() / "Library/Application Support/dev.nurb.desktop/env/bin/python"))
+SLICE = ROOT / "scripts/slice"  # Print Bay's slicer (app/server/src/slicer.ts): one slicer for the app and this script
 DONE_STATES = {"complete", "cancelled", "error"}
 COLORS = {
     "black": "#000000", "white": "#FFFFFF", "grey": "#808080", "gray": "#808080",
@@ -71,144 +83,25 @@ MAX_COLOR_DISTANCE = 120  # RGB distance; further than this isn't a match
 
 def load_job(path):
     with open(path, "rb") as fh:
-        job = tomllib.load(fh)
-    for key in ("name", "model", "profiles"):
-        if key not in job:
-            sys.exit(f"{path}: missing '{key}'")
-    return job
+        return tomllib.load(fh)
 
 
-def gcode_name(job, per_plate=1):
-    """gcode/<job>.gcode, or gcode/<job>-x<n>.gcode for n to a plate."""
-    return f"{job['name']}-x{per_plate}" if per_plate > 1 else job["name"]
+def slice_job(path, per_plate=1, material=None, nozzle=None, one_color=False, path_only=False):
+    """Slice with Print Bay's slicer (progress shows as it goes); returns the G-code's path.
 
-
-def slice_job(job, per_plate=1):
-    model = DATA / job["model"]
-    p = {k: DATA / v for k, v in job["profiles"].items()}
-    for f in [model, *p.values()]:
-        if not f.exists():
-            sys.exit(f"Missing file: {f.relative_to(DATA)}")
-
-    if per_plate > 1 and model.suffix not in (".scad", ".py"):
-        sys.exit("Filling the plate works for OpenSCAD and nurb models; this one is a ready-made file.")
-    out = DATA / "gcode" / gcode_name(job, per_plate)
-    shutil.rmtree(out, ignore_errors=True)
-    out.mkdir(parents=True)
-    # the job's [overrides.process] go on top every slice, so a job can tune a shared profile
-    process, filaments = with_overrides(p["process"], job.get("overrides", {}).get("process", {}), out), [p["filament"]]
-    parts = job.get("parts")
-    if parts:
-        if model.suffix != ".scad":
-            sys.exit("[parts] needs an OpenSCAD model (each part renders with -D part=...)")
-        rendered = [(name, render_scad(model, out / f"part-{name}.stl", {**job.get("scad", {}), "part": f'"{name}"'}), i)
-                    for i, name in enumerate(parts, 1)]
-        model = parts3mf.write(rendered, out / "model.3mf", job["name"], copies=per_plate)
-        process, filaments = multi_filament(process, p["filament"], list(parts.values()), out)
-    elif model.suffix in (".scad", ".py"):
-        stl = (render_scad(model, out / "model.stl", job.get("scad", {})) if model.suffix == ".scad"
-               else render_nurb(model, out / "model.stl", job.get("params", {})))
-        model = parts3mf.write([(job["name"], stl, 1)], out / "model.3mf", job["name"], copies=per_plate)
-    elif model.suffix == ".3mf":
-        model = single_filament(model, out / "model.3mf")
-
-    # OpenSCAD models arrive centred and laid out as the .scad intends (see parts3mf); Orca's
-    # auto-arrange would spin them (a 45-degree turn of a two-colour inlay, say), so it's off
-    # for those. Downloaded 3MFs keep Orca's placement.
-    placed = job["model"].endswith((".scad", ".py"))
-    cmd = [
-        ORCA,
-        "--load-settings", f"{p['machine']};{process}",
-        "--load-filaments", ";".join(str(f) for f in filaments),
-        "--slice", "0",
-        *(["--arrange", "0", "--orient", "0"] if placed else []),
-        "--outputdir", str(out),
-        str(model),
-    ]
-    print("Slicing:\n  " + " ".join(f'"{c}"' if " " in c else c for c in cmd))
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    gcodes = sorted(out.glob("*.gcode"), key=lambda f: f.stat().st_mtime)
-    if res.returncode != 0 or not gcodes:
-        print(res.stdout[-2000:], res.stderr[-2000:], sep="\n")
-        sys.exit("Slicing failed (output above).")
-
-    final = DATA / "gcode" / f"{gcode_name(job, per_plate)}.gcode"
-    shutil.move(gcodes[-1], final)
-    shutil.rmtree(out, ignore_errors=True)
-    print(f"G-code: {final.relative_to(DATA)}")
-    return final
-
-
-def render_scad(src, dest, params=None):
-    """Render to STL; `params` (the job's [scad] table) override top-level variables."""
-    print(f"Rendering {src.relative_to(DATA)}")
-    overrides = [arg for k, v in (params or {}).items() for arg in ("-D", f"{k}={v}")]
-    res = subprocess.run([OPENSCAD, *overrides, "-o", str(dest), str(src)], capture_output=True, text=True)
-    if res.returncode != 0 or not dest.exists():
-        print(res.stderr[-2000:])
-        sys.exit("OpenSCAD render failed (output above).")
-    return dest
-
-
-def render_nurb(src, dest, params=None):
-    """Build a nurb part (laid out to print, its default) with the job's [params] as keyword arguments."""
-    print(f"Building {src.relative_to(DATA)} with nurb")
-    sets = [f"{k}={v}" for k, v in (params or {}).items()]
-    res = subprocess.run([NURB_PYTHON, str(ROOT / "scripts/nurb_part.py"), str(src), str(dest), *sets],
-                         capture_output=True, text=True, cwd=DATA)
-    if res.returncode != 0 or not dest.exists():
-        print(res.stdout[-2000:], res.stderr[-2000:], sep="\n")
-        sys.exit("nurb build failed (output above).")
-    return dest
+    With `path_only`, just where that G-code goes, without slicing.
+    """
+    args = [str(SLICE), str(path), "--per-plate", str(per_plate),
+            *(["--material", material] if material else []), *(["--nozzle", nozzle] if nozzle else []),
+            *(["--one-color"] if one_color else []), *(["--path-only"] if path_only else [])]
+    res = subprocess.run(args, stdout=subprocess.PIPE, text=True, env={**os.environ, "PRINT_BAY_DATA": str(DATA)})
+    if res.returncode != 0:
+        sys.exit("Slicing failed (above).")
+    return Path(res.stdout.strip().splitlines()[-1])
 
 
 def hex_for(color):
     return COLORS.get(color.lower(), color if color.startswith("#") else f"#{color}")
-
-
-def with_overrides(process, overrides, out):
-    if not overrides:
-        return process
-    f = out / "process.json"
-    f.write_text(json.dumps({**json.loads(Path(process).read_text()), **{k: str(v) for k, v in overrides.items()}}))
-    return f
-
-
-def multi_filament(process, filament, colors, out):
-    """A filament profile per part, coloured like it, and the purge table to go with them.
-
-    The CLI crashes on a multi-filament object without filament colours and a
-    flush table; the colours also only matter for purging, not for which slot prints.
-    """
-    files = []
-    base = json.loads(Path(filament).read_text())
-    for i, color in enumerate(colors, 1):
-        f = out / f"filament-{i}.json"
-        f.write_text(json.dumps({**base, "filament_colour": [hex_for(color)]}))
-        files.append(f)
-    n = len(colors)
-    proc = json.loads(Path(process).read_text())
-    proc["flush_volumes_matrix"] = ["0" if i == j else "280" for i in range(n) for j in range(n)]
-    proc["flush_volumes_vector"] = ["140"] * (2 * n)
-    # the first layer goes down in [parts] order (Orca otherwise picks, e.g. the disc before its inlay)
-    proc["first_layer_print_sequence"] = [str(i) for i in range(1, n + 1)]
-    # the prime tower goes in the back-right corner that parts3mf.grid() keeps clear
-    proc["wipe_tower_x"] = [str(parts3mf.TOWER[0] + 12)]
-    proc["wipe_tower_y"] = [str(parts3mf.TOWER[1] + 12)]
-    f = out / "process.json"
-    f.write_text(json.dumps(proc))
-    return f, files
-
-
-def single_filament(src, dest):
-    """Copy a 3MF with every object on filament 1, so our filament profile applies."""
-    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zout:
-        for item in zin.infolist():
-            data = zin.read(item.filename)
-            if item.filename == "Metadata/model_settings.config":
-                data = re.sub(rb'(key="extruder" value=")\d+"', rb'\g<1>1"', data)
-            zout.writestr(item, data)
-    return dest
 
 
 def rgb(hex_color):
@@ -265,19 +158,19 @@ def main():
     ap.add_argument("--copies", type=int)
     ap.add_argument("--color")
     ap.add_argument("--per-plate", type=int, default=1, help="lay this many out on the bed at once")
+    ap.add_argument("--material", help="slice for this filament instead of PLA (wood, silk)")
+    ap.add_argument("--nozzle", help="slice for this nozzle (mm) instead of the stock 0.4 (0.6)")
+    ap.add_argument("--one-color", action="store_true", help="a multi-colour job all from one spool (--color)")
     a = ap.parse_args()
 
     job = load_job(a.job)
-    gcode = DATA / "gcode" / f"{gcode_name(job, a.per_plate)}.gcode"
-
-    if not a.no_slice:
-        gcode = slice_job(job, a.per_plate)
-    elif not gcode.exists():
+    gcode = slice_job(a.job, a.per_plate, a.material, a.nozzle, a.one_color, path_only=a.no_slice)
+    if a.no_slice and not gcode.exists():
         sys.exit(f"No G-code at {gcode.relative_to(DATA)}; run without --no-slice.")
     if a.slice_only:
         return
 
-    colors = list(job["parts"].values()) if job.get("parts") else [a.color or job.get("color")]
+    colors = list(job["parts"].values()) if job.get("parts") and not a.one_color else [a.color or job.get("color")]
     if not all(colors):
         sys.exit("No color: set `color` in the job or pass --color.")
     slots = [find_slot(c) for c in colors]

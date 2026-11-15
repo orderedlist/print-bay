@@ -7,7 +7,7 @@ import { ModelViewer, SEVERITY_COLORS, type ViewAvailability, type ViewMode } fr
 import { Params } from "../components/Params";
 import { ICONS, Toolbar, type Action } from "../components/Toolbar";
 import type { Theme } from "../theme";
-import { IDLE_STATES, type AgentSession, type Caps, type CheckReport, type Model, type ScadParam } from "../types";
+import { IDLE_STATES, type AgentSession, type Caps, type CheckReport, MATERIAL_NAMES, type Material, type Model, type ScadParam, slotName } from "../types";
 import { plateFit } from "../plate";
 import { stateLabel } from "./PrinterPanel";
 
@@ -79,7 +79,34 @@ interface Props {
 
 /** A selected model: on the stage, with the bottom toolbar and the inspector beside it. */
 export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTheme, shift, inspectorSlot, close, goPrinter, newModel, toast }: Props) {
-  const job = model.jobs[0];
+  // a multi-part model (labelled jobs, say a plant and its pot) prints one part at a time
+  const [jobName, setJobName] = useState<string | null>(null);
+  useEffect(() => setJobName(null), [model.id]);
+  const job = model.jobs.find((j) => j.name === jobName) ?? model.jobs[0];
+  const partGroups = pickerGroups(model.jobs);
+  // ---- plates: several parts printed at once ----
+  const plateParts = model.jobs.filter((j) => !j.plate && j.label); // what can go on a plate
+  const [plateBusy, setPlateBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  useEffect(() => setConfirmDelete(false), [jobName]);
+  const plateCall = async (fn: () => Promise<unknown>) => {
+    setPlateBusy(true);
+    try { await fn(); } catch (e) { toast((e as Error).message, true); }
+    setPlateBusy(false);
+  };
+  const newPlate = () => plateCall(async () => {
+    const start = job && !job.plate && job.label ? job : plateParts[0];
+    const r = await api<{ name: string }>(`/api/models/${model.id}/plates`, { method: "POST", json: { counts: { [start.name]: 1 } } });
+    setJobName(r.name);
+    setTab("print");
+  });
+  const setOnPlate = (part: string, n: number) => job?.plate && plateCall(() => api(`/api/plates/${job.name}`, {
+    method: "PUT", json: { counts: { ...Object.fromEntries(job.plate!.map((p) => [p.job, p.count])), [part]: n } },
+  }));
+  const deletePlate = () => job?.plate && plateCall(async () => {
+    await api(`/api/plates/${job.name}`, { method: "DELETE" });
+    setJobName(null);
+  });
   const drawn = !!model.file; // a model Claude is still creating has only its folder
   const parametric = model.kind === "scad" || model.kind === "py"; // OpenSCAD, or a nurb part
   const canEdit = parametric || !drawn;
@@ -98,12 +125,12 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
     let alive = true;
     if (!drawn) { setChecks(null); setChecking(false); return; }
     setChecking(true);
-    api<CheckReport>(`/api/models/${model.id}/checks`)
+    api<CheckReport>(`/api/models/${model.id}/checks${job ? `?job=${encodeURIComponent(job.name)}` : ""}`)
       .then((r) => alive && setChecks(r))
       .catch(() => alive && setChecks(null))
       .finally(() => alive && setChecking(false));
     return () => { alive = false; };
-  }, [model.id, model.meshKey, live.modelsVersion, drawn]);
+  }, [model.id, model.meshKey, live.modelsVersion, drawn, job?.name]);
   const issues = checks ? checks.findings.filter((f) => f.severity !== "info").length : 0;
 
   useEffect(() => { if (!caps.claude && tab === "claude") setTab("print"); }, [caps.claude, tab, setTab]);
@@ -136,7 +163,7 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
   const log = job ? live.slice[job.name] ?? [] : [];
   const slicing = !!job && (job.slicing || log.at(-1)?.state === "running");
   const [perPlate, setPerPlate] = useState(1); // copies laid out on one plate
-  const slice = () => job && api(`/api/jobs/${job.name}/slice`, { method: "POST", json: { perPlate } }).catch((e) => toast(e.message, true));
+  const slice = () => job && api(`/api/jobs/${job.name}/slice`, { method: "POST", json: { perPlate, material, oneColor } }).catch((e) => toast(e.message, true));
 
   // ---- parameters ----
   const [params, setParams] = useState<ScadParam[]>([]);
@@ -170,21 +197,31 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
   const [copies, setCopies] = useState(job?.copies ?? 1);
   const [confirm, setConfirm] = useState(false);
   const [sending, setSending] = useState(false);
+  const [materialPick, setMaterialPick] = useState<Material | null>(null); // null: as the printer has the spool set
+  useEffect(() => { setPicked({}); setCopies(job?.copies ?? 1); setMaterialPick(null); }, [job?.name]); // a different part: its own colour and count
   useEffect(() => { // default to the spool nearest the job's color, once the printer reports them
     const missing = colorways.filter((c) => !picked[c.key]);
     if (missing.length && slots.length)
-      setPicked((p) => ({ ...p, ...Object.fromEntries(missing.map((c) => [c.key, nearest(c.hex, slots)!])) }));
+      setPicked((p) => ({ ...p, ...Object.fromEntries(missing.map((c) => [c.key, nearest(c.hex, slots)]).filter(([, s]) => s)) }));
   }, [slots, job?.name, job?.hex, job?.parts.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const chosenFor = (key: string) => slots.find((s) => s.slot === picked[key]);
   const chosenAll = colorways.map((c) => chosenFor(c.key));
   const chosen = chosenAll.every(Boolean) ? chosenAll[0] : undefined;
-  const colorsText = chosenAll.map((c) => (c ? colorName(c.color).toLowerCase() : "?")).join(" and ");
+  // wood fill and silk slice with their own filament profiles; one copy to a plate only
+  const outside = chosenAll.some((s) => s?.slot === "EXT");
+  const spoolMaterial: Material = chosenAll.find((s) => s && s.material !== "pla")?.material ?? "pla";
+  const material: Material = perPlate > 1 ? "pla" : materialPick ?? spoolMaterial;
+  // every part from the same spool: it slices as one colour, with no swaps
+  const oneColor = multi && !!chosen && new Set(chosenAll.map((s) => s!.slot)).size === 1;
+  const sliced = oneColor ? job?.oneColor?.[material] : material === "pla" ? job : job?.materials[material];
+  const stale = !!sliced?.stale;
+  const colorsText = (oneColor ? chosenAll.slice(0, 1) : chosenAll).map((c) => (c ? colorName(c.color).toLowerCase() : "?")).join(" and ") + (material === "pla" ? "" : ` ${material}`);
   const idle = status ? IDLE_STATES.has(status.state) : false;
   // how many fit on one plate (OpenSCAD models: the slicer lays them out), from the size as printed
   const fit = parametric && checks ? plateFit(checks.size[0], checks.size[1], multi) : 1;
   useEffect(() => { if (perPlate > fit) setPerPlate(fit); }, [fit]); // eslint-disable-line react-hooks/exhaustive-deps
   const plate = perPlate > 1 ? job?.plates.find((p) => p.perPlate === perPlate) : undefined;
-  const exact = perPlate === 1 ? job?.stats : plate && !plate.stale ? plate.stats : null;
+  const exact = perPlate === 1 ? sliced?.stats : plate && !plate.stale ? plate.stats : null;
   // until this plate is sliced, draw a line through the nearest counts that are: plates share
   // travel and colour swaps, so one copy times n would overestimate badly
   const stats = exact ?? (job?.stats && perPlate > 1 ? interpolate(perPlate, [
@@ -195,10 +232,10 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
   // slice the plate as soon as the count settles, so the real time replaces the estimate
   const failed = log.at(-1)?.state === "failed";
   useEffect(() => {
-    if (perPlate <= 1 || exact || slicing || failed || !job) return; // after a failure, wait for "Try again"
+    if ((perPlate <= 1 && !oneColor) || exact || slicing || failed || !job) return; // after a failure, wait for "Try again"
     const t = setTimeout(slice, 1200);
     return () => clearTimeout(t);
-  }, [perPlate, !!exact, slicing]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [perPlate, oneColor, !!exact, slicing]); // eslint-disable-line react-hooks/exhaustive-deps
   const count = perPlate * copies;
   const submit = async (startNow: boolean) => {
     if (!job || !chosen) return;
@@ -207,10 +244,11 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
     try {
       const r = await api<{ started: boolean; queued: number }>("/api/print", {
         method: "POST", json: multi
-          ? { job: job.name, colors: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.color])), copies, perPlate, startNow }
-          : { job: job.name, color: chosen.color, copies, perPlate, startNow },
+          ? { job: job.name, colors: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.color])),
+            slots: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.slot])), copies, perPlate, material, startNow }
+          : { job: job.name, color: chosen.color, slot: chosen.slot, copies, perPlate, material, startNow },
       });
-      const what = `${title(model.id)} in ${colorsText}`;
+      const what = `${title(model.id)}${job.label ? ` (${job.label})` : ""} in ${colorsText}`;
       toast(r.started
         ? `Started ${what}.${r.queued ? ` ${r.queued} more ${r.queued === 1 ? "copy" : "copies"} queued.` : ""}`
         : `Queued ${r.queued} × ${what}.`);
@@ -224,8 +262,8 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
     else submit(false);
   };
   const total = stats ? `${estimated ? "≈ " : ""}${duration(stats.seconds * copies)}` : null;
-  const ctaLabel = sending ? (job?.stale ? "Slicing & sending…" : "Sending…")
-    : `${idle ? "Print" : "Queue"}${count > 1 ? ` ${count}` : ""}${total ? ` · ${total}` : job?.stale ? " · slices first" : ""}`;
+  const ctaLabel = sending ? (stale ? "Slicing & sending…" : "Sending…")
+    : `${idle ? "Print" : "Queue"}${count > 1 ? ` ${count}` : ""}${total ? ` · ${total}` : stale ? " · slices first" : ""}`;
 
   const actions: Action[] = [
     { label: "Print…", icon: ICONS.print, run: print, disabled: !job || !chosen, accent: true },
@@ -242,7 +280,7 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
   return (
     <>
       {drawn ? (
-        <ModelViewer model={model} mode={mode} setMode={setMode} theme={theme} shift={shift}
+        <ModelViewer model={model} job={job} mode={mode} setMode={setMode} theme={theme} shift={shift}
           onSize={setSize} onAvailable={setAvailable} checks={checks}
           colors={colorways.map((c, i) => chosenAll[i]?.color ?? c.hex ?? "").filter(Boolean)} />
       ) : (
@@ -291,6 +329,27 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
             <span className="faint" style={{ fontSize: 12 }}>{kindLabel(model.kind)}</span>
             {job?.stale && job.stats && <span style={{ fontSize: 12, color: "var(--warn)" }}>changed since slice</span>}
           </div>
+          {partGroups && (
+            <div className="parts" role="radiogroup" aria-label="Part to print">
+              {partGroups.map((g) => (
+                <div key={g.name} className="parts-row">
+                  <span className="faint">{g.name}</span>
+                  <div className="seg seg-sm">
+                    {g.jobs.map(({ job: j, short }) => (
+                      <button key={j.name} role="radio" aria-checked={j.name === job?.name} aria-label={j.label ?? j.name}
+                        title={j.stats ? `${j.label} · ${j.stats.time}` : `${j.label} · not sliced`} onClick={() => setJobName(j.name)}>
+                        {j.hex && <span className="swatch" style={{ background: j.hex }} />}{short}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              {plateParts.length > 1 && (
+                <button className="cta cta-sm" style={{ justifySelf: "start", height: 28 }} disabled={plateBusy} onClick={newPlate}
+                  title="Print several parts at once, laid out on one bed">+ New plate</button>
+              )}
+            </div>
+          )}
         </div>
 
         {tab === "print" && (
@@ -311,6 +370,38 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
               </div>
             </Section>
 
+            {job?.plate && (
+              <Section label={`On ${job.label ?? "this plate"}`}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {plateParts.map((p) => {
+                    const n = job.plate!.find((x) => x.job === p.name)?.count ?? 0;
+                    const total = job.plate!.reduce((t, x) => t + x.count, 0);
+                    return (
+                      <div key={p.name} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {p.hex && <span className="dot" style={{ width: 10, height: 10, background: p.hex }} />}
+                        <span style={{ flexGrow: 1, color: n ? undefined : "var(--muted)" }}>{p.label}</span>
+                        <div className="step mono" role="group" aria-label={`${p.label} on the plate`}>
+                          <button onClick={() => setOnPlate(p.name, n - 1)} disabled={plateBusy || n <= 0 || total <= 1} aria-label={`One fewer ${p.label}`}>−</button>
+                          <b>{n}</b>
+                          <button onClick={() => setOnPlate(p.name, n + 1)} disabled={plateBusy || n >= 20} aria-label={`One more ${p.label}`}>+</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div className="faint" style={{ fontSize: 12 }}>
+                    Each part keeps its own settings; Orca lays them out when it slices. Check the toolpaths view to see where they land.
+                  </div>
+                  {multi && <div style={{ fontSize: 12, color: "var(--warn)" }}>
+                    {colorways.length} colours on one plate swap spools every layer, which can take several times longer than a plate per colour.
+                  </div>}
+                  <button className="cta cta-sm danger" style={{ alignSelf: "flex-start", height: 28 }} disabled={plateBusy}
+                    onClick={() => (confirmDelete ? deletePlate() : setConfirmDelete(true))}>
+                    {confirmDelete ? `Delete ${job.label ?? "plate"}?` : "Delete plate"}
+                  </button>
+                </div>
+              </Section>
+            )}
+
             <Section label={multi ? `Filament · ${colorways.length} colours` : "Filament"}>
               {slots.length ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -320,20 +411,50 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
                       <div key={c.key} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                         {multi && <div style={{ display: "flex", justifyContent: "space-between" }}>
                           <span style={{ fontWeight: 500 }}>{c.label.replace(/^./, (x) => x.toUpperCase())}</span>
-                          <span className="muted">{pick ? `${colorName(pick.color)} · ${pick.slot}` : ""}</span>
+                          <span className="muted">{pick ? `${colorName(pick.color)} · ${slotName(pick.slot)}` : ""}</span>
                         </div>}
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }} role="radiogroup" aria-label={multi ? `Filament for ${c.label}` : "Filament"}>
                           {slots.map((s) => (
                             <button key={s.slot} className="sw" role="radio" aria-checked={s.slot === picked[c.key]} style={{ background: s.color }}
                               onClick={() => setPicked((p) => ({ ...p, [c.key]: s.slot }))}
-                              aria-label={`${colorName(s.color)} in ${s.slot}, ${s.remain}% left`} title={`${colorName(s.color)} · ${s.slot} · ${s.remain}%`} />
+                              aria-label={`${colorName(s.color)} in ${slotName(s.slot)}${s.remain === null ? "" : `, ${s.remain}% left`}`}
+                              title={`${colorName(s.color)} · ${slotName(s.slot)}${s.remain === null ? "" : ` · ${s.remain}%`}`} />
                           ))}
-                          {!multi && <span className="muted" style={{ marginLeft: "auto" }}>{pick ? `${colorName(pick.color)} · ${pick.slot}` : ""}</span>}
+                          {!multi && <span className="muted" style={{ marginLeft: "auto" }}>{pick ? `${colorName(pick.color)} · ${slotName(pick.slot)}` : ""}</span>}
                         </div>
+                        {!pick && (() => {
+                          const near = nearestSpools(c.hex, slots);
+                          return near.length > 1 && <div style={{ fontSize: 12, color: "var(--warn)" }}>
+                            {near.map((s) => (s.slot === "EXT" ? "the outside spool" : s.slot)).join(" and ")} are {near.length === 2 ? "both" : "all"} {colorName(near[0].color).toLowerCase()}: pick the one to print from.
+                          </div>;
+                        })()}
                       </div>
                     );
                   })}
-                  {multi && <div className="faint" style={{ fontSize: 12 }}>One print: the CFS swaps colour within each layer, so it comes off the bed as one piece.</div>}
+                  {multi && <div className="faint" style={{ fontSize: 12 }}>{oneColor
+                    ? "All from one spool: it prints as one colour, with no colour swaps."
+                    : job?.plate
+                    ? "One print: the CFS swaps colour each layer, between the parts."
+                    : "One print: the CFS swaps colour within each layer, so it comes off the bed as one piece."}</div>}
+                  {outside && <div className="faint" style={{ fontSize: 12 }}>
+                    {multi && !oneColor ? "The outside spool can only feed a one-colour print: pick it for every part." : "It prints whatever is loaded in the toolhead: load the outside spool on the printer's screen first (unloading the CFS)."}
+                  </div>}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ flexGrow: 1 }}>Material</span>
+                    <div className="seg seg-sm" role="radiogroup" aria-label="Material" style={{ flex: "none" }}
+                      title={perPlate > 1 ? "Wood and silk are set up for one to a plate" : undefined}>
+                      {(["pla", "silk", "wood"] as const).map((m) => (
+                        <button key={m} role="radio" aria-checked={material === m} disabled={perPlate > 1 && m !== "pla"}
+                          onClick={() => setMaterialPick(m)} style={{ padding: "0 10px" }}>{MATERIAL_NAMES[m]}</button>
+                      ))}
+                    </div>
+                  </div>
+                  {material !== "pla" && <div className="faint" style={{ fontSize: 12 }}>
+                    {material === "wood"
+                      ? "Wood fill: 210 °C, slower walls and longer retraction, so it strings less."
+                      : "Silk: flow capped at 10 mm³/s, so walls print slower and keep their sheen."}
+                    {materialPick && materialPick !== spoolMaterial ? "" : ` The printer has this spool set as ${material}.`}
+                  </div>}
                 </div>
               ) : <div className="muted">The printer reports no spools{status?.online ? "" : " (offline)"}.</div>}
             </Section>
@@ -471,7 +592,7 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
             <h2 id="bed-clear">Is the bed clear?</h2>
             <div className="muted">
               {count > 1 ? `${count} × ` : ""}{title(model.id)} in {colorsText}{perPlate > 1 ? `, ${perPlate} to a plate` : ""}{copies > 1 ? `, ${copies} plates` : ""}.
-              The first copy starts as soon as it's sent{job?.stale ? " (it slices first)" : ""}.
+              The first copy starts as soon as it's sent{stale ? " (it slices first)" : ""}.
               {copies > 1 ? ` You'll confirm a clear bed before each later ${fit > 1 ? "plate" : "copy"}.` : ""}
             </div>
             <div className="grid2">
@@ -506,10 +627,39 @@ function useUnits(): ["mm" | "in", (u: "mm" | "in") => void] {
   return [units, (u) => { set(u); try { localStorage.setItem("printbay.units", u); } catch { /* not remembered */ } }];
 }
 
-function nearest(hex: string | null, slots: { slot: string; color: string }[]) {
-  if (!hex || !slots.length) return slots[0]?.slot ?? null;
+/** RGB distance under which two spools count as the same colour (both black, say). */
+const SAME_COLOR = 20;
+
+/** The spools nearest `hex`: one, or several when they're the same colour (T1A and the outside spool both black). */
+function nearestSpools<S extends { slot: string; color: string }>(hex: string | null, slots: S[]): S[] {
+  if (!slots.length) return [];
+  if (!hex) return [slots[0]];
   const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
   const target = rgb(hex);
   const d = (s: { color: string }) => Math.hypot(...rgb(s.color).map((c, i) => c - target[i]));
-  return slots.reduce((best, s) => (d(s) < d(best) ? s : best)).slot;
+  const best = Math.min(...slots.map(d));
+  return slots.filter((s) => d(s) - best < SAME_COLOR);
+}
+
+/** The spool to start on: the nearest, unless two match equally (then you pick, rather than a guess feeding the wrong one). */
+function nearest(hex: string | null, slots: { slot: string; color: string }[]): string | null {
+  const near = nearestSpools(hex, slots);
+  return near.length === 1 ? near[0].slot : null;
+}
+
+/**
+ * A multi-part model's picker: its labelled jobs grouped by the words before the number
+ * ("Plant 1".."Plant 6" -> Plant: 1..6; "Funnel" on its own). Null for a one-job model.
+ */
+function pickerGroups(jobs: Model["jobs"]): { name: string; jobs: { job: Model["jobs"][number]; short: string }[] }[] | null {
+  const labelled = jobs.filter((j) => j.label);
+  if (labelled.length < 2) return null;
+  const groups = new Map<string, { job: Model["jobs"][number]; short: string }[]>();
+  for (const job of labelled) {
+    const m = job.label!.match(/^(.*?)\s*(\d+)$/);
+    const [name, short] = m ? [m[1], m[2]] : [job.label!, job.label!];
+    groups.set(name, [...(groups.get(name) ?? []), { job, short }]);
+  }
+  return [...groups].map(([name, js]) => ({ name, jobs: js }))
+    .sort((a, b) => Number(!!a.jobs[0].job.plate) - Number(!!b.jobs[0].job.plate)); // plates after the parts they hold
 }
