@@ -4,7 +4,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { unzipSync, strFromU8 } from "fflate";
-import { CACHE, NURB_PYTHON, OPENSCAD, ROOT } from "./config.js";
+import { APP_ROOT, CACHE, DATA, NURB_PYTHON, OPENSCAD } from "./config.js";
 import { getModel, getJob } from "./jobs.js";
 
 const run = promisify(execFile);
@@ -67,7 +67,7 @@ const inflight = new Map<string, Promise<string>>();
 export function meshFor(modelId: string, opts: { print?: boolean } = {}): Promise<string> {
   const model = getModel(modelId);
   if (!model.file) throw Object.assign(new Error(`${modelId} has no mesh`), { statusCode: 404 });
-  const src = path.join(ROOT, model.file);
+  const src = path.join(DATA, model.file);
   if (src.endsWith(".stl")) return Promise.resolve(src);
 
   const job = model.jobs[0] ? getJob(model.jobs[0].name) : null;
@@ -86,7 +86,7 @@ export function meshFor(modelId: string, opts: { print?: boolean } = {}): Promis
       const tmp = dest + ".tmp.stl";
       if (src.endsWith(".py")) { // a nurb part: its function, with the job's [params]
         const sets = [...(print ? [] : ["upright=True"]), ...Object.entries(params).map(([k, v]) => `${k}=${v}`)];
-        await run(NURB_PYTHON, [path.join(ROOT, "scripts/nurb_part.py"), src, tmp, ...sets], { cwd: ROOT, maxBuffer: 1 << 24, timeout: 300_000 });
+        await run(NURB_PYTHON, [path.join(APP_ROOT, "scripts/nurb_part.py"), src, tmp, ...sets], { cwd: DATA, maxBuffer: 1 << 24, timeout: 300_000 });
       } else if (src.endsWith(".scad")) {
         const defs = [...(print ? [] : ["-D", "upright=true"]), ...Object.entries(params).flatMap(([k, v]) => ["-D", `${k}=${v}`])];
         if (parts.length) { // each colour on its own, then joined with part numbers

@@ -80,7 +80,18 @@ npm run dev         # server with reload + Vite on :5173
 `app/server` (Fastify) talks to Moonraker and this repo and shells out to
 `scripts/run.py` for slicing; `app/web` is the React UI; `app/desktop` runs
 the server inside Electron. Settings come from the environment: `K2_HOST`,
-`PORT`, `BIND`, `OPENSCAD`, `PYTHON`.
+`PORT`, `BIND`, `OPENSCAD`, `PYTHON`, `PRINT_BAY_DATA`.
+
+### Library
+
+The app keeps each person's models, jobs, profiles, G-code, `costs.toml` and
+cache in a library folder, apart from its code. A checkout with its own `jobs/`
+(like this repo) is its own library, so nothing changes here. Anywhere else the
+library is `~/Library/Application Support/Print Bay/`, which starts empty
+with the K2 profiles from `profiles/` and the rates from `costs.toml`. Set
+`PRINT_BAY_DATA` to use another folder. The app passes it to `run.py`,
+`setup.py`, `scripts/nurb` and Claude's tools, and Claude chats run inside the
+library.
 
 ### Claude
 

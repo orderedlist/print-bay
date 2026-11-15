@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parse } from "smol-toml";
 import { execFileSync } from "node:child_process";
-import { NURB_PYTHON, ROOT } from "./config.js";
+import { APP_ROOT, DATA, NURB_PYTHON } from "./config.js";
 
 export const COLORS: Record<string, string> = {
   black: "#000000", white: "#FFFFFF", grey: "#808080", gray: "#808080",
@@ -14,7 +14,7 @@ const MESH_TYPES = [".scad", ".3mf", ".stl"]; // plus nurb parts (.py), named by
 
 export interface Job {
   name: string;
-  file: string; // jobs/<name>.toml, relative to ROOT
+  file: string; // jobs/<name>.toml, relative to DATA
   model: string;
   color?: string;
   copies: number;
@@ -51,7 +51,7 @@ export interface Model {
   jobs: ModelJob[];
 }
 
-const abs = (rel: string) => path.join(ROOT, rel);
+const abs = (rel: string) => path.join(DATA, rel);
 const mtime = (file: string) => (fs.existsSync(file) ? fs.statSync(file).mtimeMs : 0);
 
 export function listJobs(): Job[] {
@@ -185,7 +185,7 @@ function nurbParams(job: Job): ScadParam[] {
   const time = mtime(file);
   let hit = nurbCache.get(file);
   if (!hit || hit.mtime !== time) {
-    const out = execFileSync(NURB_PYTHON, [abs("scripts/nurb_part.py"), file, "--params"], { cwd: ROOT, encoding: "utf8", timeout: 60_000 });
+    const out = execFileSync(NURB_PYTHON, [path.join(APP_ROOT, "scripts/nurb_part.py"), file, "--params"], { cwd: DATA, encoding: "utf8", timeout: 60_000 });
     hit = { mtime: time, params: JSON.parse(out) };
     nurbCache.set(file, hit);
   }

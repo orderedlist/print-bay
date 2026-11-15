@@ -5,9 +5,10 @@
 # A plain path, so Claude's permission rules can name it (nurb lives under "Application Support").
 set -e
 root=${0:A:h:h}
+data=${PRINT_BAY_DATA:-$root}   # the library the model folder is in (the app sets it)
 env=${NURB_ENV:-$HOME/Library/Application Support/dev.nurb.desktop/env/bin}
 dir=$1; shift
-cd "$root/$dir"
+cd "$data/$dir"
 if [[ $1 == stl ]]; then
   part=$2; out=${3:A}; shift 3
   exec "$env/python" "$root/scripts/nurb_part.py" "parts/$part.py" "$out" "$@"

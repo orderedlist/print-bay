@@ -1,10 +1,10 @@
-// Print Bay server: a typed API over the printer and this repo, plus the web UI.
+// Print Bay server: a typed API over the printer and the user's library, plus the web UI.
 // Exported as start() so the Electron shell can run it in-process.
 import fs from "node:fs";
 import path from "node:path";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
-import { CAMERA_URL, HOST, K2_HOST, PORT, ROOT, WEB_DIST } from "./config.js";
+import { CAMERA_URL, DATA, HOST, K2_HOST, PORT, WEB_DIST } from "./config.js";
 import { bus, publish } from "./events.js";
 import { getJob, listModels, rates, scadParams, setScadParams } from "./jobs.js";
 import { meshFor } from "./mesh.js";
@@ -32,7 +32,7 @@ export async function start(opts: StartOptions = {}) {
   let refresh: NodeJS.Timeout | null = null;
   const watchers = ["models", "jobs", "gcode"].flatMap((dir) => {
     try {
-      return [fs.watch(path.join(ROOT, dir), { recursive: true }, () => {
+      return [fs.watch(path.join(DATA, dir), { recursive: true }, () => {
         if (refresh) clearTimeout(refresh);
         refresh = setTimeout(() => publish("models", null), 750);
       })];

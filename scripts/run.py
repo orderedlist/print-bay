@@ -39,7 +39,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 import k2  # noqa: E402
 import parts3mf  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent  # the app: scripts/
+# the library (models/, jobs/, profiles/, gcode/): the app sets PRINT_BAY_DATA; a checkout is its own
+DATA = Path(os.environ.get("PRINT_BAY_DATA") or ROOT).resolve()
 ORCA = os.environ.get("ORCA", "/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer")
 OPENSCAD = os.environ.get("OPENSCAD", "openscad")
 # nurb parts (.py) build in nurb's own environment, which the nurb app installs
@@ -69,15 +71,15 @@ def gcode_name(job, per_plate=1):
 
 
 def slice_job(job, per_plate=1):
-    model = ROOT / job["model"]
-    p = {k: ROOT / v for k, v in job["profiles"].items()}
+    model = DATA / job["model"]
+    p = {k: DATA / v for k, v in job["profiles"].items()}
     for f in [model, *p.values()]:
         if not f.exists():
-            sys.exit(f"Missing file: {f.relative_to(ROOT)}")
+            sys.exit(f"Missing file: {f.relative_to(DATA)}")
 
     if per_plate > 1 and model.suffix not in (".scad", ".py"):
         sys.exit("Filling the plate works for OpenSCAD and nurb models; this one is a ready-made file.")
-    out = ROOT / "gcode" / gcode_name(job, per_plate)
+    out = DATA / "gcode" / gcode_name(job, per_plate)
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     # the job's [overrides.process] go on top every slice, so a job can tune a shared profile
@@ -117,16 +119,16 @@ def slice_job(job, per_plate=1):
         print(res.stdout[-2000:], res.stderr[-2000:], sep="\n")
         sys.exit("Slicing failed (output above).")
 
-    final = ROOT / "gcode" / f"{gcode_name(job, per_plate)}.gcode"
+    final = DATA / "gcode" / f"{gcode_name(job, per_plate)}.gcode"
     shutil.move(gcodes[-1], final)
     shutil.rmtree(out, ignore_errors=True)
-    print(f"G-code: {final.relative_to(ROOT)}")
+    print(f"G-code: {final.relative_to(DATA)}")
     return final
 
 
 def render_scad(src, dest, params=None):
     """Render to STL; `params` (the job's [scad] table) override top-level variables."""
-    print(f"Rendering {src.relative_to(ROOT)}")
+    print(f"Rendering {src.relative_to(DATA)}")
     overrides = [arg for k, v in (params or {}).items() for arg in ("-D", f"{k}={v}")]
     res = subprocess.run([OPENSCAD, *overrides, "-o", str(dest), str(src)], capture_output=True, text=True)
     if res.returncode != 0 or not dest.exists():
@@ -137,10 +139,10 @@ def render_scad(src, dest, params=None):
 
 def render_nurb(src, dest, params=None):
     """Build a nurb part (laid out to print, its default) with the job's [params] as keyword arguments."""
-    print(f"Building {src.relative_to(ROOT)} with nurb")
+    print(f"Building {src.relative_to(DATA)} with nurb")
     sets = [f"{k}={v}" for k, v in (params or {}).items()]
     res = subprocess.run([NURB_PYTHON, str(ROOT / "scripts/nurb_part.py"), str(src), str(dest), *sets],
-                         capture_output=True, text=True, cwd=ROOT)
+                         capture_output=True, text=True, cwd=DATA)
     if res.returncode != 0 or not dest.exists():
         print(res.stdout[-2000:], res.stderr[-2000:], sep="\n")
         sys.exit("nurb build failed (output above).")
@@ -253,12 +255,12 @@ def main():
     a = ap.parse_args()
 
     job = load_job(a.job)
-    gcode = ROOT / "gcode" / f"{gcode_name(job, a.per_plate)}.gcode"
+    gcode = DATA / "gcode" / f"{gcode_name(job, a.per_plate)}.gcode"
 
     if not a.no_slice:
         gcode = slice_job(job, a.per_plate)
     elif not gcode.exists():
-        sys.exit(f"No G-code at {gcode.relative_to(ROOT)}; run without --no-slice.")
+        sys.exit(f"No G-code at {gcode.relative_to(DATA)}; run without --no-slice.")
     if a.slice_only:
         return
 

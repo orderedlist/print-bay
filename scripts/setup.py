@@ -23,7 +23,9 @@ import subprocess
 import tomllib
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent  # the app: scripts/
+# the library (models/, jobs/, profiles/, gcode/): the app sets PRINT_BAY_DATA; a checkout is its own
+DATA = Path(os.environ.get("PRINT_BAY_DATA") or ROOT).resolve()
 ORCA = os.environ.get("ORCA", "/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer")
 VENDORS = ("Creality", "OrcaFilamentLibrary")  # searched in order for presets
 DOWNLOADS = Path.home() / "Downloads"
@@ -42,12 +44,12 @@ def install_orca():
 
 
 def fetch_model(job):
-    model = ROOT / job["model"]
+    model = DATA / job["model"]
     if model.exists():
-        print(f"Model: {model.relative_to(ROOT)}")
+        print(f"Model: {model.relative_to(DATA)}")
         return
     if "source" not in job:
-        sys.exit(f"No model at {model.relative_to(ROOT)} and no 'source' in the job to fetch it from.")
+        sys.exit(f"No model at {model.relative_to(DATA)} and no 'source' in the job to fetch it from.")
 
     started = time.time()
     print(f"Opening {job['source']}")
@@ -60,7 +62,7 @@ def fetch_model(job):
             time.sleep(2)  # let the browser finish writing
             model.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(found, model)
-            print(f"Moved {found.name} -> {model.relative_to(ROOT)}")
+            print(f"Moved {found.name} -> {model.relative_to(DATA)}")
             return
         time.sleep(2)
 
@@ -94,18 +96,18 @@ def write_profiles(job, force):
     presets = job.get("presets", {})
     overrides = job.get("overrides", {})
     for kind, out in job["profiles"].items():
-        out = ROOT / out
+        out = DATA / out
         if out.exists() and not force:
-            print(f"Profile: {out.relative_to(ROOT)}")
+            print(f"Profile: {out.relative_to(DATA)}")
             continue
         if kind not in presets:
-            sys.exit(f"No [presets] {kind} in the job to build {out.relative_to(ROOT)} from.")
+            sys.exit(f"No [presets] {kind} in the job to build {out.relative_to(DATA)} from.")
         data = flatten(presets[kind], preset_index(kind))
         data.update(overrides.get(kind, {}))
         data["name"] = presets[kind]
         data["from"] = "system"
         out.write_text(json.dumps(data, indent=4) + "\n")
-        print(f"Wrote {out.relative_to(ROOT)} from '{presets[kind]}'")
+        print(f"Wrote {out.relative_to(DATA)} from '{presets[kind]}'")
 
 
 def main():

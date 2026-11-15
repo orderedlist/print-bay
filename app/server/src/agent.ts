@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { CACHE, CLAUDE, OPENSCAD, ROOT } from "./config.js";
+import { APP_ROOT, CACHE, CLAUDE, DATA, OPENSCAD } from "./config.js";
 import { publish } from "./events.js";
 import { listJobs } from "./jobs.js";
 import { checkModel } from "./modelchecks.js";
@@ -32,6 +32,9 @@ export interface AgentSession {
 }
 
 const DIR = path.join(CACHE, "agent");
+// Claude runs in the library (so its Edit rules name models/ and jobs/ there) and reaches the app's tools by full path.
+const CHECK_CLI = `node ${path.join(APP_ROOT, "app/server/dist/check-cli.js")}`;
+const NURB_WRAPPER = path.join(APP_ROOT, "scripts/nurb");
 fs.mkdirSync(DIR, { recursive: true });
 const sessions = new Map<string, AgentSession>();
 const children = new Map<string, ChildProcess>();
@@ -92,7 +95,7 @@ function jobFor(modelId: string) {
 
 export function createSession(kind: "edit" | "new", modelId?: string): AgentSession {
   if (kind === "edit") {
-    if (!modelId || !fs.existsSync(path.join(ROOT, "models", modelId))) throw fail("No such model", 404);
+    if (!modelId || !fs.existsSync(path.join(DATA, "models", modelId))) throw fail("No such model", 404);
   }
   const s: AgentSession = {
     id: randomUUID(), kind, modelId: kind === "edit" ? modelId! : null, job: kind === "edit" ? jobFor(modelId!) : null,
@@ -150,7 +153,7 @@ function nameFor(request: string): Promise<string> {
   };
   return new Promise((done) => {
     const prompt = `Name this 3D-printable part in 2 to 4 words, Title Case, no punctuation, no quotes. Reply with the name only.\n\nRequest: ${request.slice(0, 600)}`;
-    const child = spawn(CLAUDE, ["-p", prompt, "--model", "haiku", "--permission-mode", "dontAsk"], { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"] });
+    const child = spawn(CLAUDE, ["-p", prompt, "--model", "haiku", "--permission-mode", "dontAsk"], { cwd: DATA, stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
     const timer = setTimeout(() => child.kill("SIGTERM"), 25_000);
     child.stdout!.on("data", (c: Buffer) => { out += c.toString(); });
@@ -168,7 +171,7 @@ function nameFor(request: string): Promise<string> {
 function freeSlug(name: string): string {
   const base = slugify(name) || "new-model";
   let slug = base;
-  for (let n = 2; fs.existsSync(path.join(ROOT, "models", slug)) || fs.existsSync(path.join(ROOT, "jobs", `${slug}.toml`)); n++) slug = `${base}-${n}`;
+  for (let n = 2; fs.existsSync(path.join(DATA, "models", slug)) || fs.existsSync(path.join(DATA, "jobs", `${slug}.toml`)); n++) slug = `${base}-${n}`;
   return slug;
 }
 
@@ -178,13 +181,13 @@ function snapshot(s: AgentSession, turn: number) {
   fs.mkdirSync(dir, { recursive: true });
   const manifest: { path: string; existed: boolean }[] = [];
   for (const rel of scopePaths(s)) {
-    const src = path.join(ROOT, rel);
+    const src = path.join(DATA, rel);
     const existed = fs.existsSync(src);
     if (existed) fs.cpSync(src, path.join(dir, "files", rel), { recursive: true, preserveTimestamps: true });
     manifest.push({ path: rel, existed });
   }
-  const models = fs.readdirSync(path.join(ROOT, "models"));
-  const jobs = fs.readdirSync(path.join(ROOT, "jobs"));
+  const models = fs.readdirSync(path.join(DATA, "models"));
+  const jobs = fs.readdirSync(path.join(DATA, "jobs"));
   fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify({ manifest, models, jobs }));
 }
 
@@ -195,15 +198,15 @@ export function undo(id: string): AgentSession {
   const dir = path.join(sessionDir(s.id), `turn-${s.turns}`);
   const { manifest, models, jobs } = JSON.parse(fs.readFileSync(path.join(dir, "manifest.json"), "utf8"));
   for (const { path: rel, existed } of manifest as { path: string; existed: boolean }[]) {
-    const dest = path.join(ROOT, rel);
+    const dest = path.join(DATA, rel);
     fs.rmSync(dest, { recursive: true, force: true });
     // keep the old mtimes so an undone model matches its old slice again
     if (existed) fs.cpSync(path.join(dir, "files", rel), dest, { recursive: true, preserveTimestamps: true });
   }
   // a new-model turn may have created the model: remove what it added
-  for (const m of fs.readdirSync(path.join(ROOT, "models"))) if (!models.includes(m)) fs.rmSync(path.join(ROOT, "models", m), { recursive: true, force: true });
-  for (const j of fs.readdirSync(path.join(ROOT, "jobs"))) if (!jobs.includes(j)) fs.rmSync(path.join(ROOT, "jobs", j), { force: true });
-  if (s.kind === "new" && !fs.existsSync(path.join(ROOT, "models", s.modelId ?? "-"))) { s.modelId = null; s.job = null; }
+  for (const m of fs.readdirSync(path.join(DATA, "models"))) if (!models.includes(m)) fs.rmSync(path.join(DATA, "models", m), { recursive: true, force: true });
+  for (const j of fs.readdirSync(path.join(DATA, "jobs"))) if (!jobs.includes(j)) fs.rmSync(path.join(DATA, "jobs", j), { force: true });
+  if (s.kind === "new" && !fs.existsSync(path.join(DATA, "models", s.modelId ?? "-"))) { s.modelId = null; s.job = null; }
   s.turns--;
   s.transcript.push({ role: "note", text: "Undid the last change." });
   save(s);
@@ -214,11 +217,35 @@ export function undo(id: string): AgentSession {
 
 // ---- the brief ----
 
+/** A new model's job file: the K2 profiles every library starts with (see config.ts). */
+function jobTemplate(slug: string): string {
+  return `name    = "${slug}"
+model   = "models/${slug}/${slug}.scad"   # rendered to STL when slicing
+color   = "black"
+copies  = 1
+
+[profiles]
+machine  = "profiles/k2-machine.json"
+process  = "profiles/k2-0.20mm-2wall-15pct-nosupport.json"
+filament = "profiles/k2-pla.json"
+
+[presets]
+machine  = "Creality K2 0.4 nozzle"
+process  = "0.20mm Standard @Creality K2 0.4 nozzle"
+filament = "Creality Generic PLA @K2-all"
+
+[overrides.machine]
+retraction_distances_when_cut = "18"
+
+[overrides.process]
+enable_support = "0"`;
+}
+
 function brief(s: AgentSession): string {
   const common = `
 You are working inside Print Bay, a local app for a Creality K2 3D printer (260 x 260 mm bed, PLA, 0.4 mm nozzle).
 The user is chatting with you from the app's sidebar. Keep replies short and plain; they see your text and a list of your tool calls.
-The repo is ${ROOT}. Models live in models/<slug>/, jobs (how to slice/print a model) in jobs/<slug>.toml.
+Your working folder is the user's library, ${DATA}. Models live in models/<slug>/, jobs (how to slice/print a model) in jobs/<slug>.toml.
 
 OpenSCAD conventions (the app depends on these):
 - Parameters first: top-level assignments whose value is only a number or "n * in" (with \`in = 25.4;\`), each with a // comment.
@@ -228,7 +255,7 @@ OpenSCAD conventions (the app depends on these):
   \`rows = 3; // [1:6] bays up\` (whole numbers over a short range get a stepper),
   \`screw_dia = 4.5; // [3.4:M3, 4.5:M4 / #8, 5.5:M5] screw clearance\` (one button per choice).
   Pick ranges the part still works and prints across. Values in inches stay plain ("3.25 * in") with no range.
-- Model the part upright (as used), then lay it out for printing at the end, like models/tote-rack/tote-rack.scad:
+- Model the part upright (as used), then lay it out for printing at the end:
   an \`upright = false;\` flag and \`if (upright) part(); else <transform to print orientation> part();\`. The app renders with -D upright=true to show it.
 - Design to print without supports where possible (45 degree rule, short bridges), within the 260 x 260 mm bed.
   Thin plate-like walls in 1.8 mm (two perimeters a side); keep solid members compact (the slicer prints them as shells).
@@ -243,7 +270,7 @@ OpenSCAD conventions (the app depends on these):
   only that folder and the model's own files are writable. Write files with the Write tool, not shell redirects.
 - After every change, render to check it: ${OPENSCAD} -o ${scratchDir(s.id)}/check.stl <file>  (read the ECHO and any WARNING/ERROR).
   To look at it, render a PNG there (--imgsize=800,800 --camera=... --projection=o) and Read it.
-- Then run the printability checks on the model as it will be sliced: node app/server/dist/check-cli.js <model-folder-name>
+- Then run the printability checks on the model as it will be sliced: ${CHECK_CLI} <model-folder-name>
   (overhangs, thin walls, separate pieces, bed contact, warping, tipping, build volume). Fix FAILs; fix or explain WARNs.
 
 Design rules for parts that print and hold up (FDM, PLA):
@@ -266,8 +293,8 @@ Design rules for parts that print and hold up (FDM, PLA):
 You cannot slice, print, run git, or touch other files; the app slices when the user asks. Don't suggest commands for the user to run.`;
 
   // a nurb part (Python/build123d, models/<id>/parts/<part>.py) instead of OpenSCAD
-  const nurbParts = s.modelId && fs.existsSync(path.join(ROOT, "models", s.modelId, "parts"))
-    ? fs.readdirSync(path.join(ROOT, "models", s.modelId, "parts")).filter((f) => f.endsWith(".py")) : [];
+  const nurbParts = s.modelId && fs.existsSync(path.join(DATA, "models", s.modelId, "parts"))
+    ? fs.readdirSync(path.join(DATA, "models", s.modelId, "parts")).filter((f) => f.endsWith(".py")) : [];
   if (nurbParts.length) {
     const m = `models/${s.modelId}`;
     const part = nurbParts[0].slice(0, -3);
@@ -280,18 +307,18 @@ its parameters, each with a \`name: what it moves\` line in the docstring (the a
 card: keep the design notes there current, never hand-edit the AUTO block. ${m}/measurements.toml records where each fitted
 dimension came from.${s.job ? ` Its job file is jobs/${s.job}.toml (parameter overrides go in its [params] table).` : ""}
 Change only files in ${m}/${s.job ? ` and jobs/${s.job}.toml` : ""}.
-Tools, always through the wrapper (run from the repo root, one command per call):
-- scripts/nurb ${m} rules                    the design doctrine; read it before a non-trivial change
-- scripts/nurb ${m} api                      what \`from nurb import *\` provides, with signatures
-- scripts/nurb ${m} check ${part}            the printability rules; fix what fails
-- scripts/nurb ${m} inspect ${part}          measure the built part: faces, normals, which sit on the bed
-- scripts/nurb ${m} stl ${part} ${scratchDir(s.id)}/check.stl [name=value ...]   build it, with overrides
+Tools, always through the wrapper (run from your working folder, one command per call):
+- ${NURB_WRAPPER} ${m} rules                    the design doctrine; read it before a non-trivial change
+- ${NURB_WRAPPER} ${m} api                      what \`from nurb import *\` provides, with signatures
+- ${NURB_WRAPPER} ${m} check ${part}            the printability rules; fix what fails
+- ${NURB_WRAPPER} ${m} inspect ${part}          measure the built part: faces, normals, which sit on the bed
+- ${NURB_WRAPPER} ${m} stl ${part} ${scratchDir(s.id)}/check.stl [name=value ...]   build it, with overrides
 nurb's printer line may name another printer; this one is the K2 (260 x 260 mm bed), so design to that.
 Make the change the user asks for, keep the parameters editable, check it, then summarize what changed in a sentence or two
 (mention new or changed parameters by name).`;
   }
 
-  const drawn = s.modelId && fs.readdirSync(path.join(ROOT, "models", s.modelId)).some((f) => f.endsWith(".scad"));
+  const drawn = s.modelId && fs.readdirSync(path.join(DATA, "models", s.modelId)).some((f) => f.endsWith(".scad"));
   if (s.kind === "edit" || drawn) {
     return `${common}
 
@@ -307,15 +334,14 @@ what it's for, what it must fit (key dimensions, in the user's units), and anyth
 and say what you're assuming. Then create:
 - models/${s.modelId}/${s.modelId}.scad
 - models/${s.modelId}/SOURCE.md     (replace the placeholder: "# <Title>", then bullets: what it is, key dimensions, "Designed in Print Bay with Claude")
-- jobs/${s.modelId}.toml            copy the structure of jobs/tote-rack.toml (name, model, color = "black", copies = 1, [profiles], [presets],
-                              [overrides.machine], [overrides.process]; enable_support = "0" unless it truly needs supports)
+- jobs/${s.modelId}.toml            exactly this, with enable_support = "1" only if it truly needs supports:
+${jobTemplate(s.modelId!)}
 Render to verify, then tell the user it's ready and what they can tweak.`;
 }
 
 function allowedTools(s: AgentSession): string[] {
   const read = ["Read", "Glob", "Grep", `Bash(${OPENSCAD}:*)`, "Bash(openscad:*)",
-    "Bash(node app/server/dist/check-cli.js:*)", `Bash(node ${ROOT}/app/server/dist/check-cli.js:*)`,
-    "Bash(scripts/nurb:*)", `Bash(${ROOT}/scripts/nurb:*)`]; // nurb parts (see scripts/nurb)
+    `Bash(${CHECK_CLI}:*)`, `Bash(${NURB_WRAPPER}:*)`]; // nurb parts (see scripts/nurb)
   read.push(`Edit(/${scratchDir(s.id)}/**)`); // Edit rules cover Write too
   const m = `models/${s.modelId}`;
   if (s.kind === "edit") return [...read, `Edit(${m}/**)`, ...(s.job ? [`Edit(jobs/${s.job}.toml)`] : [])];
@@ -328,7 +354,7 @@ function toolLabel(name: string, input: any): string {
     case "Read": return /\.(jpe?g|png|webp|gif|heic)$/i.test(file) ? "Looked at a photo" : /\.svg$/i.test(file) ? "Read the drawing" : `Read ${file}`;
     case "Edit": return `Edited ${file}`;
     case "Write": return `Wrote ${file}`;
-    case "Glob": case "Grep": return "Searched the repo";
+    case "Glob": case "Grep": return "Searched the library";
     case "Bash": return /openscad/.test(input?.command ?? "") ? "Rendered with OpenSCAD" : `Ran ${String(input?.command ?? "").split(" ")[0]}`;
     default: return name;
   }
@@ -360,8 +386,8 @@ export function send(id: string, text: string, uploads: string[] = [], shown?: s
       try {
         s.modelId = freeSlug(name);
         snapshot(s, s.turns); // before the folder exists, so undoing this turn removes it
-        fs.mkdirSync(path.join(ROOT, "models", s.modelId));
-        fs.writeFileSync(path.join(ROOT, "models", s.modelId, "SOURCE.md"), `# ${name}\n\n- Being designed in Print Bay with Claude.\n`);
+        fs.mkdirSync(path.join(DATA, "models", s.modelId));
+        fs.writeFileSync(path.join(DATA, "models", s.modelId, "SOURCE.md"), `# ${name}\n\n- Being designed in Print Bay with Claude.\n`);
       } catch (err) {
         s.modelId = null;
         s.turns--;
@@ -391,7 +417,7 @@ function attachSvgs(s: AgentSession, svgs: string[]): string {
   if (!svgs.length || !s.modelId) return "";
   const names = svgs.map((file) => {
     const base = path.basename(file).replace(/^\d+-[0-9a-f]{8}/, "drawing");
-    fs.copyFileSync(file, path.join(ROOT, "models", s.modelId!, base));
+    fs.copyFileSync(file, path.join(DATA, "models", s.modelId!, base));
     return `models/${s.modelId}/${base}`;
   });
   return `\n\nSVG drawings from the user, copied into the model folder: ${names.join(", ")}
@@ -408,7 +434,7 @@ function run(s: AgentSession, prompt: string) {
     "--append-system-prompt", brief(s),
   ];
   if (s.claudeSessionId) args.push("--resume", s.claudeSessionId);
-  const child = spawn(CLAUDE, args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(CLAUDE, args, { cwd: DATA, stdio: ["ignore", "pipe", "pipe"] });
   children.set(s.id, child);
 
   let streaming: Extract<Entry, { role: "assistant" }> | null = null;

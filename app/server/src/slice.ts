@@ -1,6 +1,7 @@
 // Slicing stays in scripts/run.py (OrcaSlicer CLI, profiles, filament reassignment).
 import { spawn } from "node:child_process";
-import { PYTHON, ROOT } from "./config.js";
+import path from "node:path";
+import { APP_ROOT, DATA, PYTHON } from "./config.js";
 import { publish } from "./events.js";
 import { getJob } from "./jobs.js";
 
@@ -18,7 +19,7 @@ export function slice(jobName: string, perPlate = 1): Promise<void> {
 
   const work = new Promise<void>((resolve, reject) => {
     publish("slice", { job: job.name, state: "running", line: `Slicing ${job.file}…` });
-    const child = spawn(PYTHON, ["-u", "scripts/run.py", job.file, "--slice-only", ...(perPlate > 1 ? ["--per-plate", String(perPlate)] : [])], { cwd: ROOT });
+    const child = spawn(PYTHON, ["-u", path.join(APP_ROOT, "scripts/run.py"), job.file, "--slice-only", ...(perPlate > 1 ? ["--per-plate", String(perPlate)] : [])], { cwd: DATA });
     let tail = "";
     const onData = (chunk: Buffer) => {
       for (const line of chunk.toString().split("\n").filter(Boolean)) {
