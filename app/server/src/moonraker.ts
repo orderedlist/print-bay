@@ -1,5 +1,7 @@
 // Moonraker client for the K2 (ported from scripts/k2.py).
 import fs from "node:fs/promises";
+import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { MOONRAKER } from "./config.js";
 import type { Material } from "./jobs.js";
@@ -130,3 +132,74 @@ export const start = (filename: string) =>
 export const pause = () => api("POST", "/printer/print/pause");
 export const resume = () => api("POST", "/printer/print/resume");
 export const cancel = () => api("POST", "/printer/print/cancel");
+
+// ---- finding the printer ----
+
+export interface FoundPrinter {
+  host: string; // ip:port, as Settings saves it
+  ip: string;
+  hostname: string; // what the printer calls itself, e.g. K2-360F
+  state: string;
+  k2: boolean; // a K2: its name says so, or it has a CFS
+}
+
+const MOONRAKER_PORT = 7125;
+const MAX_HOSTS = 1024;
+
+/** The IPv4 addresses on this Mac's local networks (a network bigger than MAX_HOSTS: the block around this Mac). */
+function localAddresses(): string[] {
+  const toInt = (ip: string) => ip.split(".").reduce((n, p) => n * 256 + Number(p), 0);
+  const toIp = (n: number) => [24, 16, 8, 0].map((s) => Math.floor(n / 2 ** s) % 256).join(".");
+  const seen = new Set<string>();
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const a of list ?? []) {
+      if (a.family !== "IPv4" || a.internal) continue;
+      const bits = Number(a.cidr?.split("/")[1] ?? 24);
+      if (bits > 30) continue; // a VPN tunnel or point-to-point link: nothing to scan
+      const span = 2 ** (32 - Math.max(bits, 32 - Math.log2(MAX_HOSTS)));
+      const start = Math.floor(toInt(a.address) / span) * span;
+      for (let n = start + 1; n < start + span - 1; n++) if (toIp(n) !== a.address) seen.add(toIp(n));
+    }
+  }
+  return [...seen];
+}
+
+/** Whether something accepts a connection on the Moonraker port, within `ms`. */
+function portOpen(ip: string, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: ip, port: MOONRAKER_PORT });
+    const done = (open: boolean) => { socket.destroy(); resolve(open); };
+    socket.setTimeout(ms, () => done(false));
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+  });
+}
+
+let scanning: Promise<FoundPrinter[]> | null = null;
+
+/** Every Moonraker printer on the local networks, K2s first. One scan at a time; takes a few seconds. */
+export function scanForPrinters(): Promise<FoundPrinter[]> {
+  scanning ??= (async () => {
+    const ips = localAddresses();
+    const open: string[] = [];
+    for (let i = 0; i < ips.length; i += 256) {
+      const batch = ips.slice(i, i + 256);
+      const hits = await Promise.all(batch.map((ip) => portOpen(ip, 700)));
+      open.push(...batch.filter((_, k) => hits[k]));
+    }
+    const found = await Promise.all(open.map(async (ip): Promise<FoundPrinter | null> => {
+      const host = `${ip}:${MOONRAKER_PORT}`;
+      try {
+        const info = await probe(host);
+        let cfs = false;
+        try {
+          const res = await fetch(`http://${host}/printer/objects/query?box`, { signal: AbortSignal.timeout(2000) });
+          cfs = !!((await res.json()) as any)?.result?.status?.box;
+        } catch { /* no CFS, or no answer: still a printer */ }
+        return { host, ip, hostname: info.hostname, state: info.state, k2: /^k2/i.test(info.hostname) || cfs };
+      } catch { return null; } // something else on that port
+    }));
+    return found.filter((f): f is FoundPrinter => !!f).sort((a, b) => Number(b.k2) - Number(a.k2) || a.hostname.localeCompare(b.hostname));
+  })().finally(() => { scanning = null; });
+  return scanning;
+}

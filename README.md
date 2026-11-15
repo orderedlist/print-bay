@@ -161,9 +161,11 @@ still need OrcaSlicer, and Claude Code, OpenSCAD and Git for those features.
 
 A new library opens on **Set up Print Bay**, which is **Settings** (the gear)
 from then on:
-- **Printer:** the K2's address, tested against Moonraker before saving. It
-  starts as `k2.local` (the printer's Bonjour name); use the IP address if
-  that doesn't answer.
+- **Printer:** **Scan network** finds printers by asking every address on the
+  Mac's local network for Moonraker (port 7125; a few seconds), K2s first,
+  and runs by itself while no printer is set. Or type the address and Test
+  it. The K2 doesn't advertise itself over Bonjour, so give it a fixed
+  address in your router.
 - **Library:** where it is. While it's empty, you can give the remote of a
   library pushed from another computer and it copies that instead.
 - **Programs:** OrcaSlicer (needed to slice), plus OpenSCAD, Claude Code, Git

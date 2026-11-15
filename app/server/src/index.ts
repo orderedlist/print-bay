@@ -198,6 +198,7 @@ export async function start(opts: StartOptions = {}) {
     publish("status", status);
     return v;
   });
+  app.post("/api/settings/scan-printers", async () => moonraker.scanForPrinters());
   app.post<{ Body: { host: string } }>("/api/settings/test-printer", async (req) => {
     const host = normalizeHost(req.body?.host ?? "");
     return { host, ...(await moonraker.probe(host)) };

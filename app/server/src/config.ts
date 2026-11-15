@@ -67,12 +67,10 @@ export function writeSettings(next: Settings): void {
   applySettings();
 }
 
-/** The K2's name on the local network (Bonjour), used until an address is saved in Settings. */
-export const DEFAULT_PRINTER = "k2.local:7125";
 /** A checkout that is its own library predates settings: it keeps the printer it always used. */
 const LEGACY_PRINTER = DATA === path.resolve(APP_ROOT) ? "192.168.4.42:7125" : null;
 
-/** "192.168.4.42" or "k2.local:7125" (Moonraker's port is 7125 unless given). */
+/** "192.168.4.42" or "k2-360f.local:7125" (Moonraker's port is 7125 unless given). */
 export function normalizeHost(input: string): string {
   const h = input.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
   if (!/^[A-Za-z0-9.-]+(:\d{1,5})?$/.test(h)) throw Object.assign(new Error("Use the printer's IP address or host name, like 192.168.1.50"), { statusCode: 400 });
@@ -115,7 +113,8 @@ export function resolveTool(name: ToolName, settings = readSettings()): { path: 
 export function resolvePrinter(settings = readSettings()): { host: string | null; source: Source } {
   if (ENV0.K2_HOST) return { host: ENV0.K2_HOST, source: "env" };
   if (settings.printer) return { host: settings.printer, source: "settings" };
-  return { host: LEGACY_PRINTER ?? DEFAULT_PRINTER, source: "default" };
+  // no guess for anyone else: Setup scans the network for the printer
+  return { host: LEGACY_PRINTER, source: LEGACY_PRINTER ? "default" : "missing" };
 }
 
 // Live bindings: modules that import these see new values after applySettings().
