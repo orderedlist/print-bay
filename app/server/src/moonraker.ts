@@ -93,7 +93,12 @@ export async function probe(host: string): Promise<{ hostname: string; state: st
     const info = ((await res.json()) as { result?: any }).result ?? {};
     return { hostname: String(info.hostname ?? host), state: String(info.state ?? "ready"), message: String(info.state_message ?? "").trim() };
   } catch (e) {
-    const why = (e as Error).name === "TimeoutError" ? "no answer" : (e as Error).message;
+    const code = (e as { cause?: { code?: string } }).cause?.code;
+    const name = host.split(":")[0];
+    // an unknown .local name doesn't fail, the Bonjour lookup just never answers
+    if (code === "ENOTFOUND" || code === "EAI_AGAIN" || (name.endsWith(".local") && (e as Error).name === "TimeoutError"))
+      throw Object.assign(new Error(`Nothing on the network answers to ${name}. If the printer is on, use its IP address instead.`), { statusCode: 502 });
+    const why = (e as Error).name === "TimeoutError" ? "no answer" : code ?? (e as Error).message;
     throw Object.assign(new Error(`Couldn't reach Moonraker at ${host} (${why}). Check the address and that the printer is on.`), { statusCode: 502 });
   }
 }

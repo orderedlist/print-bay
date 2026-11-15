@@ -108,7 +108,9 @@ still need OrcaSlicer, and Claude Code, OpenSCAD and Git for those features.
 
 A new library opens on **Set up Print Bay**, which is **Settings** (the gear)
 from then on:
-- **Printer:** the K2's address, tested against Moonraker before saving.
+- **Printer:** the K2's address, tested against Moonraker before saving. It
+  starts as `k2.local` (the printer's Bonjour name); use the IP address if
+  that doesn't answer.
 - **Library:** where it is. While it's empty, you can give the remote of a
   library pushed from another computer and it copies that instead.
 - **Programs:** OrcaSlicer (needed to slice), plus OpenSCAD, Claude Code, Git
@@ -122,7 +124,7 @@ library's `settings.json`, which git never commits. Environment variables
 still win: `K2_HOST`, `ORCA`, `OPENSCAD`, `CLAUDE`, `GIT`,
 `NURB_PYTHON`, plus `PORT`, `BIND` and `PRINT_BAY_DATA`. A checkout that is
 its own library (like this repo) skips setup and keeps its old printer
-address. Only the computer running Print Bay can change settings.
+address (192.168.4.81). Only the computer running Print Bay can change settings.
 
 ### Library
 

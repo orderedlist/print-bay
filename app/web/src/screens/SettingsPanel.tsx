@@ -77,7 +77,7 @@ function PrinterSection({ settings, save, toast }: { settings: SettingsView; sav
     finally { setBusy(false); }
   };
   const testAndSave = async () => {
-    if (!host.trim()) { await save({ printer: null }, "Printer cleared."); return; }
+    if (!host.trim()) { await save({ printer: null }, "Using k2.local."); return; }
     const found = await test();
     // an unreachable printer may just be off: save anyway, and say so
     if (await save({ printer: host }, found ? "Printer saved." : undefined) && !found) toast("Saved, but the printer didn't answer. Is it on?", true);
@@ -90,10 +90,10 @@ function PrinterSection({ settings, save, toast }: { settings: SettingsView; sav
         Printer
       </div>
       <div className="muted" style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45 }}>
-        The K2's IP address (on the printer: Settings → Network), or its host name. Give it a fixed address in your router so it doesn't change.
+        Print Bay looks for the K2 at k2.local. If Test can't find it there, use its IP address (on the printer: Settings → Network), and give it a fixed address in your router so it doesn't change.
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <input className="field mono" value={host} placeholder="192.168.1.50" disabled={fromEnv} aria-label="Printer address"
+        <input className="field mono" value={host} placeholder="k2.local" disabled={fromEnv} aria-label="Printer address"
           onChange={(e) => { setHost(e.target.value); setResult(null); }} onKeyDown={(e) => { if (e.key === "Enter" && !busy) testAndSave(); }} />
         <button className="cta cta-sm" style={{ padding: "0 12px", flex: "none" }} disabled={busy || fromEnv || !host.trim()} onClick={test}>{busy ? "Testing…" : "Test"}</button>
       </div>
@@ -101,7 +101,7 @@ function PrinterSection({ settings, save, toast }: { settings: SettingsView; sav
       {fromEnv
         ? <div className="faint" style={{ fontSize: 12, marginTop: 8 }}>Set by K2_HOST in the environment.</div>
         : host.trim() !== current && (
-          <button className="cta cta-md go" style={{ marginTop: 10 }} disabled={busy} onClick={testAndSave}>{host.trim() ? "Save printer" : "Clear printer"}</button>
+          <button className="cta cta-md go" style={{ marginTop: 10 }} disabled={busy} onClick={testAndSave}>{host.trim() ? "Save printer" : "Use k2.local"}</button>
         )}
     </div>
   );
