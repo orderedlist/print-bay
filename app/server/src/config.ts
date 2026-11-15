@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,7 +21,7 @@ process.env.PRINT_BAY_DATA = DATA; // slicing, nurb, the checks CLI and Claude's
 const ENV0 = { ...process.env };
 
 export const CACHE = process.env.PRINT_BAY_CACHE ?? path.join(DATA, ".cache", "app");
-export const WEB_DIST = path.resolve(here, "../../web/dist");
+export const WEB_DIST = path.join(APP_ROOT, "app/web/dist");
 
 export const PORT = Number(process.env.PORT ?? 8765);
 export const HOST = process.env.BIND ?? "0.0.0.0"; // LAN, so a phone can use it
@@ -32,7 +31,7 @@ export const HOST = process.env.BIND ?? "0.0.0.0"; // LAN, so a phone can use it
 // computer sharing the library has its own printer address and tool paths.
 
 export const SETTINGS_FILE = path.join(DATA, "settings.json");
-export type ToolName = "orca" | "python" | "openscad" | "claude" | "git" | "nurb";
+export type ToolName = "orca" | "openscad" | "claude" | "git" | "nurb";
 export interface Settings { printer?: string; tools?: Partial<Record<ToolName, string>>; setupDone?: boolean }
 
 export function readSettings(): Settings {
@@ -59,14 +58,12 @@ const NURB_ENV = path.join(HOME, "Library/Application Support/dev.nurb.desktop/e
 /** Where each tool usually is. Apps launched from Finder get a minimal PATH, so look in the usual places. */
 const CANDIDATES: Record<ToolName, string[]> = {
   orca: ["/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer", path.join(HOME, "Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer")],
-  python: [path.join(APP_ROOT, ".venv/bin/python"), "/opt/homebrew/bin/python3", "/usr/local/bin/python3",
-    "/Library/Frameworks/Python.framework/Versions/Current/bin/python3", "python3"],
   openscad: ["/opt/homebrew/bin/openscad", "/Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD", "openscad"],
   claude: [path.join(HOME, ".local/bin/claude"), "/opt/homebrew/bin/claude", "claude"],
   git: ["/usr/bin/git", "/opt/homebrew/bin/git", "git"],
   nurb: [path.join(NURB_ENV, "python")],
 };
-const ENV_NAMES: Record<ToolName, string> = { orca: "ORCA", python: "PYTHON", openscad: "OPENSCAD", claude: "CLAUDE", git: "GIT", nurb: "NURB_PYTHON" };
+const ENV_NAMES: Record<ToolName, string> = { orca: "ORCA", openscad: "OPENSCAD", claude: "CLAUDE", git: "GIT", nurb: "NURB_PYTHON" };
 
 /** A bare command name, found on PATH (plus Homebrew's, which Finder-launched apps lack). */
 function onPath(cmd: string): string | null {
@@ -76,25 +73,6 @@ function onPath(cmd: string): string | null {
   return null;
 }
 
-// The slicing scripts need Python 3.11+ (tomllib) and requests. Checking runs Python, so remember it per path.
-const pythonChecked = new Map<string, string | null>();
-export function pythonProblem(bin: string, fresh = false): string | null {
-  if (fresh || !pythonChecked.has(bin)) {
-    let problem: string | null = null;
-    if (!fs.existsSync(bin)) problem = "Not found";
-    else {
-      try { execFileSync(bin, ["-c", "import tomllib"], { timeout: 8000, stdio: "ignore" }); }
-      catch { problem = "Needs Python 3.11 or newer"; }
-      if (!problem) {
-        try { execFileSync(bin, ["-c", "import requests"], { timeout: 8000, stdio: "ignore" }); }
-        catch { problem = `Needs the requests package (${bin} -m pip install requests)`; }
-      }
-    }
-    pythonChecked.set(bin, problem);
-  }
-  return pythonChecked.get(bin)!;
-}
-
 export type Source = "env" | "settings" | "found" | "default" | "missing";
 /** Where a tool is and why: the environment, settings.json, or a usual place. */
 export function resolveTool(name: ToolName, settings = readSettings()): { path: string; source: Source } {
@@ -102,9 +80,7 @@ export function resolveTool(name: ToolName, settings = readSettings()): { path: 
   if (env) return { path: env, source: "env" };
   const set = settings.tools?.[name];
   if (set) return { path: set, source: "settings" };
-  const found = CANDIDATES[name].map(onPath).filter((p): p is string => !!p);
-  // the first Python that can run the scripts, else the first one there (Settings says what it lacks)
-  const best = name === "python" ? found.find((p) => !pythonProblem(p)) ?? found[0] : found[0];
+  const best = CANDIDATES[name].map(onPath).find((p): p is string => !!p);
   if (best) return { path: best, source: "found" };
   const fallback = CANDIDATES[name][CANDIDATES[name].length - 1];
   return { path: fallback, source: "missing" };
@@ -121,7 +97,6 @@ export let K2_HOST: string | null = null;
 export let MOONRAKER: string | null = null;
 export let CAMERA_URL: string | null = null;
 export let ORCA = "";
-export let PYTHON = "";
 export let OPENSCAD = "";
 export let CLAUDE = "";
 export let GIT = "";
@@ -134,12 +109,11 @@ export function applySettings(): void {
   MOONRAKER = K2_HOST ? `http://${K2_HOST}` : null;
   CAMERA_URL = K2_HOST ? `http://${K2_HOST.split(":")[0]}:8000/call/webrtc_local` : null;
   ORCA = resolveTool("orca", s).path;
-  PYTHON = resolveTool("python", s).path;
   OPENSCAD = resolveTool("openscad", s).path;
   CLAUDE = resolveTool("claude", s).path;
   GIT = resolveTool("git", s).path;
   NURB_PYTHON = resolveTool("nurb", s).path;
-  // run.py, setup.py and k2.py read these
+  // nurb_part.py, and the terminal scripts if run from the app, read these
   Object.assign(process.env, { ORCA, OPENSCAD, NURB_PYTHON });
   if (K2_HOST) process.env.K2_HOST = K2_HOST; else delete process.env.K2_HOST;
 }
@@ -154,6 +128,26 @@ export function seedLibrary(): void {
     if (!fs.existsSync(path.join(DATA, "profiles", f))) fs.copyFileSync(path.join(APP_ROOT, "profiles", f), path.join(DATA, "profiles", f));
   fs.mkdirSync(CACHE, { recursive: true });
 }
+
+/**
+ * Where Claude's tools (scripts/check, scripts/nurb) are reached from. Claude's permission rules
+ * name a command by its path, which can't have spaces ("/Applications/Print Bay.app/..."), so a
+ * path with spaces gets links from a folder without any.
+ */
+export const TOOL_BIN = (() => {
+  const scripts = path.join(APP_ROOT, "scripts");
+  if (!/\s/.test(scripts)) return scripts;
+  const bin = path.join(HOME, "Library", "Caches", "PrintBay", "bin");
+  fs.mkdirSync(bin, { recursive: true });
+  for (const tool of ["check", "nurb"]) {
+    const link = path.join(bin, tool);
+    const target = path.join(scripts, tool);
+    let current: string | null = null;
+    try { current = fs.readlinkSync(link); } catch { /* not there yet */ }
+    if (current !== target) { fs.rmSync(link, { force: true }); fs.symlinkSync(target, link); }
+  }
+  return bin;
+})();
 
 seedLibrary();
 applySettings();

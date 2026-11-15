@@ -88,7 +88,7 @@ export interface Repo {
   suggestion: string;
 }
 
-export type ToolName = "orca" | "python" | "openscad" | "claude" | "git" | "nurb";
+export type ToolName = "orca" | "openscad" | "claude" | "git" | "nurb";
 export type SettingSource = "env" | "settings" | "found" | "default" | "missing";
 export interface ToolStatus {
   name: ToolName; label: string; purpose: string; required: boolean;

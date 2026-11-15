@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  APP_ROOT, DATA, normalizeHost, pythonProblem, readSettings, resolvePrinter, resolveTool, writeSettings,
+  APP_ROOT, DATA, normalizeHost, readSettings, resolvePrinter, resolveTool, writeSettings,
   type Settings, type Source, type ToolName,
 } from "./config.js";
 import { rates, type Rates } from "./jobs.js";
@@ -31,7 +31,6 @@ export interface SettingsView {
 
 const TOOLS: { name: ToolName; label: string; purpose: string; required: boolean; install: string }[] = [
   { name: "orca", label: "OrcaSlicer", purpose: "Slices models into G-code", required: true, install: "Download it from orcaslicer.com and drag it to Applications." },
-  { name: "python", label: "Python 3.11+", purpose: "Runs the slicing scripts", required: true, install: "brew install python, then: python3 -m pip install requests" },
   { name: "openscad", label: "OpenSCAD", purpose: "Draws .scad models and their parameters", required: false, install: "brew install --cask openscad@snapshot" },
   { name: "claude", label: "Claude Code", purpose: "Designs and edits models with Claude", required: false, install: "Install Claude Code (claude.com/claude-code), then run claude once to sign in." },
   { name: "git", label: "Git", purpose: "Commits and pushes in Changes", required: false, install: "xcode-select --install" },
@@ -44,7 +43,7 @@ function toolStatus(s: Settings): ToolStatus[] {
   return TOOLS.map((t) => {
     const { path: p, source } = resolveTool(t.name, s);
     const exists = path.isAbsolute(p) && fs.existsSync(p);
-    const problem = t.name === "python" ? pythonProblem(p) : exists ? null : "Not found";
+    const problem = exists ? null : "Not found";
     return { ...t, path: p, source, ok: !problem, problem };
   });
 }
@@ -66,7 +65,7 @@ export function view(): SettingsView {
     tools,
     rates: rates(),
     library: { path: DATA, fresh: libraryFresh() },
-    caps: { slice: ok("orca") && ok("python"), openscad: ok("openscad"), claude: ok("claude"), git: ok("git"), nurb: ok("nurb") },
+    caps: { slice: ok("orca"), openscad: ok("openscad"), claude: ok("claude"), git: ok("git"), nurb: ok("nurb") },
   };
 }
 
@@ -92,7 +91,6 @@ export function update(u: SettingsUpdate): SettingsView {
       if (!path.isAbsolute(p) || !fs.existsSync(p)) throw fail(`Nothing at ${p}. Use the full path to the program.`);
       // OrcaSlicer.app picked in Finder: use the binary inside it
       s.tools[name] = p.endsWith(".app") ? path.join(p, "Contents/MacOS", path.basename(p, ".app")) : p;
-      if (name === "python") pythonProblem(s.tools[name]!, true); // check it afresh
     }
   }
   if (u.rates) writeRates({ ...rates(), ...u.rates });

@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { APP_ROOT, CACHE, CLAUDE, DATA, OPENSCAD } from "./config.js";
+import { CACHE, CLAUDE, DATA, OPENSCAD, TOOL_BIN } from "./config.js";
 import { publish } from "./events.js";
 import { listJobs } from "./jobs.js";
 import { checkModel } from "./modelchecks.js";
@@ -33,8 +33,8 @@ export interface AgentSession {
 
 const DIR = path.join(CACHE, "agent");
 // Claude runs in the library (so its Edit rules name models/ and jobs/ there) and reaches the app's tools by full path.
-const CHECK_CLI = `node ${path.join(APP_ROOT, "app/server/dist/check-cli.js")}`;
-const NURB_WRAPPER = path.join(APP_ROOT, "scripts/nurb");
+const CHECK_CLI = path.join(TOOL_BIN, "check");
+const NURB_WRAPPER = path.join(TOOL_BIN, "nurb");
 fs.mkdirSync(DIR, { recursive: true });
 const sessions = new Map<string, AgentSession>();
 const children = new Map<string, ChildProcess>();

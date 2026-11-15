@@ -8,3 +8,5 @@ app/node_modules/
 app/server/dist/
 app/web/dist/
 settings.json
+app/desktop/build/
+app/desktop/release/

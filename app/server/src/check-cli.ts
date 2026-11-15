@@ -1,4 +1,4 @@
-// node app/server/dist/check-cli.js <model-id>
+// node app/server/dist/check-cli.js <model-id>   (or scripts/check <model-id>)
 // Printability checks for a model as it will be sliced, for people and agents.
 import { checkModel } from "./modelchecks.js";
 

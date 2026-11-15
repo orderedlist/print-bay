@@ -1,10 +1,9 @@
-// Slicing stays in scripts/run.py (OrcaSlicer CLI, profiles, filament reassignment).
-import { spawn } from "node:child_process";
-import path from "node:path";
+// Slicing jobs, one run per job and plate size, with progress over SSE (the work is in slicer.ts).
 import fs from "node:fs";
-import { APP_ROOT, DATA, ORCA, PYTHON } from "./config.js";
+import { ORCA } from "./config.js";
 import { publish } from "./events.js";
 import { getJob } from "./jobs.js";
+import { sliceJob } from "./slicer.js";
 
 const running = new Map<string, Promise<void>>();
 
@@ -19,30 +18,17 @@ export function slice(jobName: string, perPlate = 1): Promise<void> {
   const key = perPlate > 1 ? `${job.name}@${perPlate}` : job.name;
   if (running.has(key)) return running.get(key)!;
 
-  const work = new Promise<void>((resolve, reject) => {
+  const work = (async () => {
     publish("slice", { job: job.name, state: "running", line: `Slicing ${job.file}…` });
-    const child = spawn(PYTHON, ["-u", path.join(APP_ROOT, "scripts/run.py"), job.file, "--slice-only", ...(perPlate > 1 ? ["--per-plate", String(perPlate)] : [])], { cwd: DATA });
-    let tail = "";
-    const onData = (chunk: Buffer) => {
-      for (const line of chunk.toString().split("\n").filter(Boolean)) {
-        tail = (tail + "\n" + line).slice(-4000);
-        publish("slice", { job: job.name, state: "running", line });
-      }
-    };
-    child.stdout.on("data", onData);
-    child.stderr.on("data", onData);
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) {
-        publish("slice", { job: job.name, state: "done", line: "Sliced." });
-        publish("models", null);
-        resolve();
-      } else {
-        publish("slice", { job: job.name, state: "failed", line: `Slicing failed (exit ${code}).` });
-        reject(new Error(`Slicing ${job.name} failed:\n${tail.trim().split("\n").slice(-6).join("\n")}`));
-      }
-    });
-  }).finally(() => running.delete(key));
+    try {
+      await sliceJob(job, perPlate, (line) => publish("slice", { job: job.name, state: "running", line }));
+    } catch (e) {
+      publish("slice", { job: job.name, state: "failed", line: (e as Error).message });
+      throw new Error(`Slicing ${job.name} failed: ${(e as Error).message}`);
+    }
+    publish("slice", { job: job.name, state: "done", line: "Sliced." });
+    publish("models", null);
+  })().finally(() => running.delete(key));
 
   running.set(key, work);
   return work;

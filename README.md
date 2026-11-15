@@ -77,9 +77,32 @@ npm start           # or just the server: http://localhost:8765 (also on the LAN
 npm run dev         # server with reload + Vite on :5173
 ```
 
-`app/server` (Fastify) talks to Moonraker and this repo and shells out to
-`scripts/run.py` for slicing; `app/web` is the React UI; `app/desktop` runs
-the server inside Electron.
+`app/server` (Fastify) talks to Moonraker and the library and slices with
+OrcaSlicer's CLI (`slicer.ts`, a port of `run.py`'s slicing, so the app needs
+no Python); `app/web` is the React UI; `app/desktop` runs the server inside
+Electron. The terminal scripts above keep their own Python copy of the
+slicing, so a change to how jobs slice goes in both.
+
+### Building the Mac app
+
+```
+cd app
+npm run dist            # signed Print Bay.app, .dmg and .zip in desktop/release/
+npm run dist:notarize   # the same, notarized so it opens on other Macs without a warning
+```
+
+`desktop/bundle.mjs` stages what the app carries: the server and the checks
+CLI bundled with esbuild, the built UI, `scripts/check`, `scripts/nurb` and
+`nurb_part.py`, the K2 profiles and default rates. No models, jobs or slices.
+The app runs its own binary as Node for `scripts/check`, and links Claude's
+tools from `~/Library/Caches/PrintBay/bin` because their real path has a space.
+
+Signing uses the "Developer ID Application" certificate in your keychain.
+Notarizing also needs Apple credentials in the environment, for example
+`APPLE_KEYCHAIN_PROFILE` (a profile made with `xcrun notarytool
+store-credentials`), or `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and
+`APPLE_TEAM_ID`. The build is Apple silicon only. People who install it
+still need OrcaSlicer, and Claude Code, OpenSCAD and Git for those features.
 
 ### Setup and Settings
 
@@ -88,15 +111,15 @@ from then on:
 - **Printer:** the K2's address, tested against Moonraker before saving.
 - **Library:** where it is. While it's empty, you can give the remote of a
   library pushed from another computer and it copies that instead.
-- **Programs:** OrcaSlicer and Python 3.11+ with `requests` (both needed to
-  slice), plus OpenSCAD, Claude Code, Git and nurb (optional). Each is found
+- **Programs:** OrcaSlicer (needed to slice), plus OpenSCAD, Claude Code, Git
+  and nurb (optional). Each is found
   in the usual places or set by path, with install hints for what's missing.
   Without Claude Code the Claude features hide; without Git, Changes hides.
 - **Costs:** the rates in `costs.toml`.
 
 The printer and program paths belong to each computer, so they're kept in the
 library's `settings.json`, which git never commits. Environment variables
-still win: `K2_HOST`, `ORCA`, `PYTHON`, `OPENSCAD`, `CLAUDE`, `GIT`,
+still win: `K2_HOST`, `ORCA`, `OPENSCAD`, `CLAUDE`, `GIT`,
 `NURB_PYTHON`, plus `PORT`, `BIND` and `PRINT_BAY_DATA`. A checkout that is
 its own library (like this repo) skips setup and keeps its old printer
 address. Only the computer running Print Bay can change settings.
@@ -108,9 +131,9 @@ cache in a library folder, apart from its code. A checkout with its own `jobs/`
 (like this repo) is its own library, so nothing changes here. Anywhere else the
 library is `~/Library/Application Support/Print Bay/`, which starts empty
 with the K2 profiles from `profiles/` and the rates from `costs.toml`. Set
-`PRINT_BAY_DATA` to use another folder. The app passes it to `run.py`,
-`setup.py`, `scripts/nurb` and Claude's tools, and Claude chats run inside the
-library.
+`PRINT_BAY_DATA` to use another folder. The app passes it to `scripts/nurb`
+and Claude's tools, `run.py` and `setup.py` read it too, and Claude chats run
+inside the library.
 
 ### Changes (git)
 

@@ -1,7 +1,22 @@
 // Print Bay desktop shell: runs the server in-process and shows the UI in a window.
 // The server keeps listening on the LAN, so a phone browser works while this is open.
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, shell } from "electron";
-import { start } from "../server/dist/index.js";
+
+// Packaged, the server and everything it runs come from Contents/Resources/printbay (see
+// bundle.mjs), and the app's own binary stands in for `node` (scripts/check).
+// From a checkout, it's the repo itself.
+async function loadServer() {
+  if (!app.isPackaged) return import("../server/dist/index.js");
+  const root = path.join(process.resourcesPath, "printbay");
+  process.env.PRINT_BAY_ROOT = root;
+  process.env.PRINT_BAY_NODE = process.execPath;
+  process.env.PRINT_BAY_PACKAGED = "1";
+  // Finder gives apps a bare PATH; add Homebrew's so OpenSCAD, git and friends turn up
+  process.env.PATH = [...new Set([...(process.env.PATH ?? "").split(":"), "/opt/homebrew/bin", "/usr/local/bin"])].filter(Boolean).join(":");
+  return import(pathToFileURL(path.join(root, "app/server/dist/index.js")).href);
+}
 
 let url;
 
@@ -29,6 +44,7 @@ async function createWindow() {
 
 app.whenReady().then(async () => {
   try {
+    const { start } = await loadServer();
     ({ url } = await start({ quiet: true }));
   } catch (err) {
     // Port taken: most likely the server is already running (npm start); use it.

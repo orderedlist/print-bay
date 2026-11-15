@@ -83,7 +83,8 @@ export async function ensureLibraryRepo(): Promise<void> {
 }
 
 async function roots(): Promise<{ id: Repo["id"]; name: string; dir: string }[]> {
-  const [lib, app] = await Promise.all([toplevel(DATA), toplevel(APP_ROOT)]);
+  // a packaged app's code is read-only and not a checkout, wherever the .app happens to sit
+  const [lib, app] = await Promise.all([toplevel(DATA), process.env.PRINT_BAY_PACKAGED ? null : toplevel(APP_ROOT)]);
   if (lib && lib === app) return [{ id: "library", name: "Library and app", dir: lib }];
   return [
     ...(lib ? [{ id: "library" as const, name: "Library", dir: lib }] : []),
