@@ -7,7 +7,7 @@ import { ModelViewer, SEVERITY_COLORS, type ViewAvailability, type ViewMode } fr
 import { Params } from "../components/Params";
 import { ICONS, Toolbar, type Action } from "../components/Toolbar";
 import type { Theme } from "../theme";
-import { IDLE_STATES, type AgentSession, type CheckReport, type Model, type ScadParam } from "../types";
+import { IDLE_STATES, type AgentSession, type Caps, type CheckReport, type Model, type ScadParam } from "../types";
 import { plateFit } from "../plate";
 import { stateLabel } from "./PrinterPanel";
 
@@ -63,6 +63,7 @@ function Section({ icon, label, open, toggle, children, extra, action }: {
 interface Props {
   model: Model;
   live: Live;
+  caps: Caps; // what's set up on this computer: no Claude Code, no Claude tab
   tab: InspectorTab;
   setTab: (tab: InspectorTab) => void;
   theme: Theme;
@@ -77,7 +78,7 @@ interface Props {
 }
 
 /** A selected model: on the stage, with the bottom toolbar and the inspector beside it. */
-export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, shift, inspectorSlot, close, goPrinter, newModel, toast }: Props) {
+export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTheme, shift, inspectorSlot, close, goPrinter, newModel, toast }: Props) {
   const job = model.jobs[0];
   const drawn = !!model.file; // a model Claude is still creating has only its folder
   const parametric = model.kind === "scad" || model.kind === "py"; // OpenSCAD, or a nurb part
@@ -105,6 +106,8 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   }, [model.id, model.meshKey, live.modelsVersion, drawn]);
   const issues = checks ? checks.findings.filter((f) => f.severity !== "info").length : 0;
 
+  useEffect(() => { if (!caps.claude && tab === "claude") setTab("print"); }, [caps.claude, tab, setTab]);
+
   // ---- Claude ----
   const [agentId, setAgentId] = useState<string | null>(null);
   const session = useAgentSession(agentId, live);
@@ -120,7 +123,7 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
       return s;
     } catch (e) { toast((e as Error).message, true); return null; }
   };
-  useEffect(() => { if (tab === "claude" && canEdit && !agentId) openAgent(); }, [tab, agentId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (tab === "claude" && caps.claude && canEdit && !agentId) openAgent(); }, [tab, agentId]); // eslint-disable-line react-hooks/exhaustive-deps
   /** "Analyze and correct": a review pass by Claude using every rule it knows plus the checks. */
   const analyze = async () => {
     const s = await openAgent();
@@ -226,9 +229,11 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
 
   const actions: Action[] = [
     { label: "Print…", icon: ICONS.print, run: print, disabled: !job || !chosen, accent: true },
-    { label: slicing ? "Slicing…" : "Re-slice", icon: ICONS.slice, run: slice, disabled: !job || slicing },
-    { label: "Analyze and correct", icon: ICONS.spark, run: analyze, disabled: !canEdit || session?.running, accent: true },
-    { label: "New model with Claude", icon: ICONS.plus, run: newModel },
+    { label: slicing ? "Slicing…" : caps.slice ? "Re-slice" : "Re-slice (set up OrcaSlicer in Settings)", icon: ICONS.slice, run: slice, disabled: !job || slicing || !caps.slice },
+    ...(caps.claude ? [
+      { label: "Analyze and correct", icon: ICONS.spark, run: analyze, disabled: !canEdit || session?.running, accent: true },
+      { label: "New model with Claude", icon: ICONS.plus, run: newModel },
+    ] : []),
   ];
 
   const [stateText, stateColor] = stateLabel(status?.state ?? "offline");
@@ -272,9 +277,11 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
               Print{issues > 0 && <span className="badge-n" aria-label={`${issues} check findings`}>{issues}</span>}
             </button>
             <button role="tab" aria-selected={tab === "design"} onClick={() => setTab("design")}>Design</button>
-            <button role="tab" aria-selected={tab === "claude"} onClick={() => setTab("claude")}>
-              Claude{session?.running && <span className="spinner" aria-label="working" />}
-            </button>
+            {caps.claude && (
+              <button role="tab" aria-selected={tab === "claude"} onClick={() => setTab("claude")}>
+                Claude{session?.running && <span className="spinner" aria-label="working" />}
+              </button>
+            )}
           </div>
         </div>
 

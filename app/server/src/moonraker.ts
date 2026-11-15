@@ -27,6 +27,7 @@ export interface PrinterStatus {
 export const IDLE_STATES = new Set(["standby", "complete", "cancelled", "error"]);
 
 async function api(method: string, route: string, init: RequestInit = {}, timeoutMs = 10_000) {
+  if (!MOONRAKER) throw Object.assign(new Error("No printer set up yet. Add its address in Settings."), { statusCode: 409 });
   const res = await fetch(MOONRAKER + route, { method, signal: AbortSignal.timeout(timeoutMs), ...init });
   if (!res.ok) throw new Error(`Moonraker ${route}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
   const body = (await res.json()) as { result?: unknown };
@@ -82,6 +83,19 @@ export async function getStatus(): Promise<PrinterStatus> {
     slots: slotsFrom(s.box),
     message: ps.message ?? "",
   };
+}
+
+/** Check an address before saving it: Moonraker's /printer/info answers with the host name and state. */
+export async function probe(host: string): Promise<{ hostname: string; state: string; message: string }> {
+  try {
+    const res = await fetch(`http://${host}/printer/info`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const info = ((await res.json()) as { result?: any }).result ?? {};
+    return { hostname: String(info.hostname ?? host), state: String(info.state ?? "ready"), message: String(info.state_message ?? "").trim() };
+  } catch (e) {
+    const why = (e as Error).name === "TimeoutError" ? "no answer" : (e as Error).message;
+    throw Object.assign(new Error(`Couldn't reach Moonraker at ${host} (${why}). Check the address and that the printer is on.`), { statusCode: 502 });
+  }
 }
 
 export async function upload(file: string): Promise<void> {

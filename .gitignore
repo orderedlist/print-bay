@@ -7,3 +7,4 @@ __pycache__/
 app/node_modules/
 app/server/dist/
 app/web/dist/
+settings.json

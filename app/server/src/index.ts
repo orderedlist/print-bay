@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
-import { CAMERA_URL, DATA, HOST, K2_HOST, PORT, WEB_DIST } from "./config.js";
+import { CAMERA_URL, DATA, HOST, K2_HOST, normalizeHost, PORT, WEB_DIST } from "./config.js";
 import { bus, publish } from "./events.js";
 import { getJob, listModels, rates, scadParams, setScadParams } from "./jobs.js";
 import { meshFor } from "./mesh.js";
@@ -15,6 +15,7 @@ import { getQueue, print, removeEntry, startNext } from "./printing.js";
 import { isSlicing, slice } from "./slice.js";
 import * as agent from "./agent.js";
 import * as repos from "./repos.js";
+import * as settings from "./settings.js";
 
 export interface StartOptions { port?: number; host?: string; quiet?: boolean }
 
@@ -118,6 +119,29 @@ export async function start(opts: StartOptions = {}) {
     return reply.type(`image/${ext}`).header("Cache-Control", "max-age=86400").send(fs.createReadStream(file));
   });
 
+  // ---- setup and settings ----
+  // Changing where the app reaches the printer, runs programs from, or pushes to: only from this computer.
+  const local = (ip: string) => /^(127\.|::1$|::ffff:127\.)/.test(ip);
+  const localOnly = (what: string) => Object.assign(new Error(`${what} from the computer running Print Bay`), { statusCode: 403 });
+  app.get("/api/settings", async () => settings.view());
+  app.put<{ Body: settings.SettingsUpdate }>("/api/settings", async (req) => {
+    if (!local(req.ip)) throw localOnly("Change settings");
+    const v = settings.update(req.body ?? {});
+    status = await moonraker.getStatus(); // a new printer address shows at once
+    publish("status", status);
+    return v;
+  });
+  app.post<{ Body: { host: string } }>("/api/settings/test-printer", async (req) => {
+    const host = normalizeHost(req.body?.host ?? "");
+    return { host, ...(await moonraker.probe(host)) };
+  });
+  app.post<{ Body: { url: string } }>("/api/library/start-from-remote", async (req) => {
+    if (!local(req.ip)) throw localOnly("Change the library");
+    const result = await repos.startFromRemote(req.body?.url ?? "", settings.view().library.fresh);
+    publish("models", null);
+    return result;
+  });
+
   // ---- git: the library and the app's code ----
   app.get<{ Querystring: { fetch?: string } }>("/api/repos", async (req) => {
     if (req.query.fetch) await repos.fetchAll();
@@ -133,7 +157,7 @@ export async function start(opts: StartOptions = {}) {
   app.post<{ Params: { id: string } }>("/api/repos/:id/push", async (req) => repos.push(req.params.id));
   app.put<{ Params: { id: string }; Body: { url: string } }>("/api/repos/:id/remote", async (req, reply) => {
     // where pushes go: only from this computer, not from anything else on the network
-    if (!/^(127\.|::1$|::ffff:127\.)/.test(req.ip)) return reply.status(403).send({ error: "Change the remote from the computer running Print Bay" });
+    if (!local(req.ip)) return reply.status(403).send({ error: "Change the remote from the computer running Print Bay" });
     return repos.setRemote(req.params.id, req.body?.url ?? "");
   });
 

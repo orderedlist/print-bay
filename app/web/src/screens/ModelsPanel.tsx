@@ -8,7 +8,7 @@ interface Props {
   models: Model[];
   selected: string | null;
   open: (id: string) => void;
-  create: () => void;
+  create: (() => void) | null; // null: Claude Code isn't set up
 }
 
 /** The library: create with Claude, search, and every model. */
@@ -20,9 +20,11 @@ export const ModelsPanel = forwardRef<HTMLInputElement, Props>(function ModelsPa
 
   return (
     <>
-      <div className="sec">
-        <button className="cta go cta-md" onClick={create}>{ICONS.spark}Create with Claude</button>
-      </div>
+      {create && (
+        <div className="sec">
+          <button className="cta go cta-md" onClick={create}>{ICONS.spark}Create with Claude</button>
+        </div>
+      )}
       <div className="sec">
         <label className="search" style={{ marginBottom: 14 }}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>

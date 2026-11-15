@@ -79,8 +79,27 @@ npm run dev         # server with reload + Vite on :5173
 
 `app/server` (Fastify) talks to Moonraker and this repo and shells out to
 `scripts/run.py` for slicing; `app/web` is the React UI; `app/desktop` runs
-the server inside Electron. Settings come from the environment: `K2_HOST`,
-`PORT`, `BIND`, `OPENSCAD`, `PYTHON`, `PRINT_BAY_DATA`.
+the server inside Electron.
+
+### Setup and Settings
+
+A new library opens on **Set up Print Bay**, which is **Settings** (the gear)
+from then on:
+- **Printer:** the K2's address, tested against Moonraker before saving.
+- **Library:** where it is. While it's empty, you can give the remote of a
+  library pushed from another computer and it copies that instead.
+- **Programs:** OrcaSlicer and Python 3.11+ with `requests` (both needed to
+  slice), plus OpenSCAD, Claude Code, Git and nurb (optional). Each is found
+  in the usual places or set by path, with install hints for what's missing.
+  Without Claude Code the Claude features hide; without Git, Changes hides.
+- **Costs:** the rates in `costs.toml`.
+
+The printer and program paths belong to each computer, so they're kept in the
+library's `settings.json`, which git never commits. Environment variables
+still win: `K2_HOST`, `ORCA`, `PYTHON`, `OPENSCAD`, `CLAUDE`, `GIT`,
+`NURB_PYTHON`, plus `PORT`, `BIND` and `PRINT_BAY_DATA`. A checkout that is
+its own library (like this repo) skips setup and keeps its old printer
+address. Only the computer running Print Bay can change settings.
 
 ### Library
 

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { anyRunning } from "./agent.js";
-import { APP_ROOT, DATA, GIT } from "./config.js";
+import { APP_ROOT, DATA, GIT, seedLibrary } from "./config.js";
 
 export interface RepoChange { path: string; status: "added" | "modified" | "deleted" | "renamed" | "conflict" }
 export interface Repo {
@@ -53,10 +53,28 @@ const waitForClaude = () => { if (anyRunning()) throw fail("Wait for Claude to f
 
 const toplevel = (dir: string) => git(dir, ["rev-parse", "--show-toplevel"]).then((s) => fs.realpathSync(s.trim()), () => null);
 
+/**
+ * What the library repo never commits, whatever its .gitignore says (one cloned from
+ * elsewhere may not have one): this computer's settings, slices and the cache.
+ */
+const NEVER = ["settings.json", "gcode/", ".cache/"];
+async function excludeLocalFiles(): Promise<void> {
+  const top = await toplevel(DATA);
+  if (!top) return;
+  const rel = path.relative(top, DATA);
+  const file = path.resolve(top, (await git(DATA, ["rev-parse", "--git-path", "info/exclude"])).trim());
+  const have = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+  const missing = NEVER.map((p) => "/" + path.posix.join(rel.split(path.sep).join("/"), p)).filter((p) => !have.split("\n").includes(p));
+  if (!missing.length) return;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${have}${have && !have.endsWith("\n") ? "\n" : ""}# Print Bay: this computer's files\n${missing.join("\n")}\n`);
+}
+
 /** A new library becomes its own repo, ignoring slices and the cache. */
 export async function ensureLibraryRepo(): Promise<void> {
-  if (await toplevel(DATA)) return;
+  if (await toplevel(DATA)) return excludeLocalFiles();
   await git(DATA, ["init", "-b", "main"]);
+  await excludeLocalFiles();
   const ignore = path.join(DATA, ".gitignore");
   if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, "gcode/\n.cache/\n.DS_Store\n");
   await git(DATA, ["add", "-A"]);
@@ -233,6 +251,42 @@ export async function pull(id: string): Promise<PullResult> {
     appChanged: changed.some((p) => p.startsWith("app/")),
     stashConflict: /autostash resulted in conflicts|changes are safe in the stash/i.test(said),
   };
+}
+
+/**
+ * Make a fresh library a copy of one on a remote (another computer's, or a shared one):
+ * only while it has no models of its own, so nothing is lost.
+ */
+export async function startFromRemote(url: string, libraryFresh: boolean): Promise<Repo[]> {
+  waitForClaude();
+  const u = url.trim();
+  if (!REMOTE.test(u)) throw fail("Use an https:// or git@host:path URL");
+  if (!libraryFresh) throw fail("This library already has models. Start from a remote only in a new, empty library.", 409);
+  const lib = (await roots()).find((r) => r.id === "library");
+  if (!lib || path.resolve(lib.dir) !== fs.realpathSync(DATA)) throw fail("The library isn't its own repository", 409);
+  const dir = lib.dir;
+  const had = await git(dir, ["remote", "get-url", "origin"]).then(() => true, () => false);
+  await git(dir, had ? ["remote", "set-url", "origin", u] : ["remote", "add", "origin", u]);
+  try {
+    await git(dir, ["fetch", "origin"], 180_000);
+    // the remote's default branch: "ref: refs/heads/main\tHEAD"
+    const head = await git(dir, ["ls-remote", "--symref", "origin", "HEAD"]);
+    const branch = head.match(/ref: refs\/heads\/(\S+)\s+HEAD/)?.[1];
+    if (!branch) throw fail("That remote is empty. Push this library to it instead.", 409);
+    await git(dir, ["checkout", "-f", "-B", branch, `origin/${branch}`]);
+    await git(dir, ["branch", "-u", `origin/${branch}`]);
+    await git(dir, ["clean", "-fdq", "--", "models", "jobs"]); // starter leftovers the remote doesn't have
+  } catch (e) {
+    if (!had) await git(dir, ["remote", "remove", "origin"]).catch(() => {});
+    const text = (e as { output?: string }).output ?? "";
+    if (SIGN_IN.test(text)) throw signInFailed(u);
+    if (/not found|does not appear to be a git repository|Could not resolve host/i.test(text)) throw fail(`Couldn't find a repository at ${u}.`, 404);
+    throw e;
+  }
+  seedLibrary(); // profiles or rates the remote's library doesn't have
+  await excludeLocalFiles();
+  fetchedAt.set(dir, Date.now());
+  return listRepos();
 }
 
 // https://host/path, ssh://..., git@host:path, or a local folder (absolute path)

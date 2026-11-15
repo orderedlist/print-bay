@@ -87,3 +87,20 @@ export interface Repo {
   changes: RepoChange[];
   suggestion: string;
 }
+
+export type ToolName = "orca" | "python" | "openscad" | "claude" | "git" | "nurb";
+export type SettingSource = "env" | "settings" | "found" | "default" | "missing";
+export interface ToolStatus {
+  name: ToolName; label: string; purpose: string; required: boolean;
+  path: string; source: SettingSource; ok: boolean; problem: string | null; install: string;
+}
+export interface Rates { filament_per_kg: number; printer_watts: number; power_per_kwh: number }
+export interface Caps { slice: boolean; openscad: boolean; claude: boolean; git: boolean; nurb: boolean }
+export interface SettingsView {
+  needsSetup: boolean;
+  printer: { host: string | null; source: SettingSource };
+  tools: ToolStatus[];
+  rates: Rates;
+  library: { path: string; fresh: boolean };
+  caps: Caps;
+}

@@ -1,7 +1,8 @@
 // Slicing stays in scripts/run.py (OrcaSlicer CLI, profiles, filament reassignment).
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { APP_ROOT, DATA, PYTHON } from "./config.js";
+import fs from "node:fs";
+import { APP_ROOT, DATA, ORCA, PYTHON } from "./config.js";
 import { publish } from "./events.js";
 import { getJob } from "./jobs.js";
 
@@ -14,6 +15,7 @@ export function isSlicing(job: string) {
 /** `perPlate` > 1 slices that many laid out on one plate (OpenSCAD jobs). */
 export function slice(jobName: string, perPlate = 1): Promise<void> {
   const job = getJob(jobName);
+  if (!fs.existsSync(ORCA)) throw Object.assign(new Error("OrcaSlicer isn't set up, so nothing can be sliced. Install it or set its path in Settings."), { statusCode: 409 });
   const key = perPlate > 1 ? `${job.name}@${perPlate}` : job.name;
   if (running.has(key)) return running.get(key)!;
 

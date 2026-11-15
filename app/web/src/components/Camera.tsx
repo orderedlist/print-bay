@@ -21,9 +21,9 @@ async function connect(pc: RTCPeerConnection, url: string) {
   await pc.setRemoteDescription(JSON.parse(atob(await res.text())));
 }
 
-type CamState = "connecting" | "live" | "failed";
+type CamState = "connecting" | "live" | "failed" | "none"; // none: no printer set up
 
-export function Camera({ children }: { children?: React.ReactNode }) {
+export function Camera({ children, openSettings }: { children?: React.ReactNode; openSettings?: () => void }) {
   const video = useRef<HTMLVideoElement>(null);
   const [state, setState] = useState<CamState>("connecting");
   const [attempt, setAttempt] = useState(0);
@@ -38,9 +38,9 @@ export function Camera({ children }: { children?: React.ReactNode }) {
     const v = video.current;
     const onPlaying = () => alive && setState("live");
     v?.addEventListener("playing", onPlaying);
-    const timeout = setTimeout(() => alive && setState((s) => (s === "live" ? s : "failed")), 12_000);
-    api<{ camera: string }>("/api/printer")
-      .then(({ camera }) => connect(pc, camera))
+    const timeout = setTimeout(() => alive && setState((s) => (s === "live" || s === "none" ? s : "failed")), 12_000);
+    api<{ camera: string | null }>("/api/printer")
+      .then(({ camera }) => (camera ? connect(pc, camera) : alive && setState("none")))
       .catch(() => alive && setState("failed"));
     return () => {
       alive = false;
@@ -61,6 +61,11 @@ export function Camera({ children }: { children?: React.ReactNode }) {
           </svg>
           {state === "connecting" ? (
             <div className="mono" style={{ fontSize: 12 }}>Connecting to the camera…</div>
+          ) : state === "none" ? (
+            <>
+              <div>No printer set up yet.</div>
+              {openSettings && <button className="cta cta-sm" onClick={openSettings}>Add your K2</button>}
+            </>
           ) : (
             <>
               <div>No video. The camera allows one viewer; close the Creality app if it's watching.</div>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AgentSession, Model, PrinterStatus, QueueState, Repo, SliceEvent } from "./types";
+import type { AgentSession, Model, PrinterStatus, QueueState, Repo, SettingsView, SliceEvent } from "./types";
 
 export async function api<T = unknown>(path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
   const { json, ...rest } = init ?? {};
@@ -64,6 +64,18 @@ export function useRepos(version: number): [Repo[] | null, (r: Repo[]) => void] 
     return () => removeEventListener("focus", load);
   }, [version]);
   return [repos, setRepos];
+}
+
+/** Setup and settings, refetched when the window regains focus (a tool may have been installed meanwhile). */
+export function useSettings(): [SettingsView | null, (s: SettingsView) => void] {
+  const [settings, setSettings] = useState<SettingsView | null>(null);
+  useEffect(() => {
+    const load = () => api<SettingsView>("/api/settings").then(setSettings).catch(() => {});
+    load();
+    addEventListener("focus", load);
+    return () => removeEventListener("focus", load);
+  }, []);
+  return [settings, setSettings];
 }
 
 // ---- formatting ----
