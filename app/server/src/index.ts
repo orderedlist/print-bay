@@ -119,7 +119,15 @@ export async function start(opts: StartOptions = {}) {
   });
 
   // ---- git: the library and the app's code ----
-  app.get("/api/repos", async () => repos.listRepos());
+  app.get<{ Querystring: { fetch?: string } }>("/api/repos", async (req) => {
+    if (req.query.fetch) await repos.fetchAll();
+    return repos.listRepos();
+  });
+  app.post<{ Params: { id: string } }>("/api/repos/:id/pull", async (req) => {
+    const result = await repos.pull(req.params.id);
+    if (result.pulled) publish("models", null);
+    return result;
+  });
   app.post<{ Params: { id: string }; Body: { message: string } }>("/api/repos/:id/commit", async (req) =>
     repos.commit(req.params.id, req.body?.message ?? ""));
   app.post<{ Params: { id: string } }>("/api/repos/:id/push", async (req) => repos.push(req.params.id));

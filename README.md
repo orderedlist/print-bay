@@ -102,8 +102,15 @@ with a suggested message like "Update tote-rack". Push uses your own git
 sign-in (SSH key or credential helper) and never prompts, so push once from a
 terminal if it can't sign in. Without a remote, the tab asks for one, and only
 the computer running Print Bay can set it. In a checkout that is its own
-library, the library and the app are one repo. There's no Pull yet: if the
-remote has commits this copy doesn't, run `git pull` in a terminal.
+library, the library and the app are one repo.
+
+**Pull** rebases your commits onto the remote's and keeps uncommitted edits.
+It won't start if you've edited a file the pull changes (commit first), and if
+your commits and the remote's change the same lines it backs out with nothing
+changed, for you to merge in a terminal. The tab fetches while it's open, at
+most once a minute, so it can show what's waiting. Commit and Pull wait while
+Claude is editing. A pull that changes `app/` takes effect after a restart;
+changes to `scripts/` apply at once.
 
 ### Claude
 

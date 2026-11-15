@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
+import { anyRunning } from "./agent.js";
 import { APP_ROOT, DATA, GIT } from "./config.js";
 
 export interface RepoChange { path: string; status: "added" | "modified" | "deleted" | "renamed" | "conflict" }
@@ -29,15 +30,26 @@ const ENV = {
   GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? "ssh -o BatchMode=yes",
 };
 
+/** Resolves with stdout; a failure's `output` holds everything git said, for matching. */
 function git(cwd: string, args: string[], timeout = 15_000): Promise<string> {
+  return gitBoth(cwd, args, timeout).then((r) => r.stdout);
+}
+
+function gitBoth(cwd: string, args: string[], timeout = 15_000): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     execFile(GIT, args, { cwd, env: ENV, timeout, maxBuffer: 1 << 24 }, (err, stdout, stderr) => {
-      const out = (stderr || err?.message || "").trim();
-      if (err) reject(Object.assign(fail(out.split("\n").filter((l) => !l.startsWith("hint:")).slice(-4).join("\n"), 500), { output: out }));
-      else resolve(stdout);
+      if (!err) return resolve({ stdout, stderr });
+      const said = (stderr || err.message).trim();
+      reject(Object.assign(fail(said.split("\n").filter((l) => !l.startsWith("hint:")).slice(-4).join("\n"), 500),
+        { output: `${stdout}\n${said}` }));
     });
   });
 }
+
+const SIGN_IN = /terminal prompts disabled|could not read Username|Permission denied|publickey|Authentication failed/i;
+const signInFailed = (remote: string | null) =>
+  fail(`Git couldn't sign in to ${remote}. Push once from a terminal (or set up an SSH key or credential helper), then try again.`);
+const waitForClaude = () => { if (anyRunning()) throw fail("Wait for Claude to finish editing first", 409); };
 
 const toplevel = (dir: string) => git(dir, ["rev-parse", "--show-toplevel"]).then((s) => fs.realpathSync(s.trim()), () => null);
 
@@ -108,6 +120,17 @@ function suggest(changes: RepoChange[]): string {
   return msg;
 }
 
+// Fetching keeps "to pull" honest; at most once a minute per repo, and never an error.
+const fetchedAt = new Map<string, number>();
+export async function fetchAll(): Promise<void> {
+  await Promise.all((await roots()).map(async ({ dir }) => {
+    if (Date.now() - (fetchedAt.get(dir) ?? 0) < 60_000) return;
+    fetchedAt.set(dir, Date.now());
+    const remote = await git(dir, ["remote"]).then((s) => s.trim(), () => "");
+    if (remote) await git(dir, ["fetch", "--quiet", "--prune"], 20_000).catch(() => {});
+  }));
+}
+
 export async function listRepos(): Promise<Repo[]> {
   return Promise.all((await roots()).map(async ({ id, name, dir }) => {
     const [status, remote, last] = await Promise.all([
@@ -127,6 +150,7 @@ export async function listRepos(): Promise<Repo[]> {
 
 /** Commit everything that changed (git add -A): what the app shows is what goes in. */
 export async function commit(id: string, message: string): Promise<Repo[]> {
+  waitForClaude();
   const dir = await dirFor(id);
   const msg = message.trim();
   if (!msg) throw fail("Write a commit message");
@@ -152,12 +176,63 @@ export async function push(id: string): Promise<Repo[]> {
     await git(dir, repo.upstream ? ["push"] : ["push", "-u", "origin", repo.branch], 120_000);
   } catch (e) {
     const text = (e as { output?: string }).output ?? "";
-    if (/rejected|non-fast-forward|fetch first/i.test(text)) throw fail("The remote has commits this copy doesn't. Pull them in a terminal (git pull), then push.");
-    if (/terminal prompts disabled|could not read Username|Permission denied|publickey|Authentication failed/i.test(text))
-      throw fail(`Git couldn't sign in to ${repo.remote}. Push once from a terminal (or set up an SSH key or credential helper), then try again.`);
+    if (/rejected|non-fast-forward|fetch first/i.test(text)) throw fail("The remote has commits this copy doesn't. Pull them first, then push.");
+    if (SIGN_IN.test(text)) throw signInFailed(repo.remote);
     throw e;
   }
   return listRepos();
+}
+
+export interface PullResult {
+  repos: Repo[];
+  pulled: number; // commits that came in
+  appChanged: boolean; // the app's code changed: rebuild and restart to use it
+  stashConflict: boolean; // uncommitted edits didn't reapply cleanly; they're kept in git's stash
+}
+
+/**
+ * Bring in the remote's commits: rebase local commits on top (a straight line of history),
+ * with uncommitted edits set aside and put back. If anything conflicts, nothing changes.
+ */
+export async function pull(id: string): Promise<PullResult> {
+  waitForClaude();
+  const dir = await dirFor(id);
+  const repo = (await listRepos()).find((r) => r.id === id)!;
+  if (!repo.remote) throw fail("Add a remote to pull from first");
+  if (!repo.upstream) throw fail("Push once first, so this branch knows where to pull from");
+  const before = (await git(dir, ["rev-parse", "HEAD"])).trim();
+  // Uncommitted edits to a file the pull changes would come back as conflict markers in it: refuse first.
+  try { await git(dir, ["fetch", "--quiet"], 60_000); } catch (e) {
+    if (SIGN_IN.test((e as { output?: string }).output ?? "")) throw signInFailed(repo.remote);
+    throw e;
+  }
+  const incoming = new Set((await git(dir, ["diff", "--name-only", "HEAD...@{u}"])).split("\n").filter(Boolean));
+  const clash = repo.changes.map((c) => c.path).filter((p) => incoming.has(p));
+  if (clash.length)
+    throw fail(`The pull changes ${clash.slice(0, 3).join(", ")}${clash.length > 3 ? ` and ${clash.length - 3} more` : ""}, which you've edited. Commit first, then pull.`, 409);
+  let said = "";
+  try {
+    const r = await gitBoth(dir, ["pull", "--rebase", "--autostash"], 120_000);
+    said = r.stdout + r.stderr;
+  } catch (e) {
+    const text = (e as { output?: string }).output ?? "";
+    if (/CONFLICT|could not apply|Resolve all conflicts/i.test(text)) {
+      await git(dir, ["rebase", "--abort"]).catch(() => {}); // back to exactly where we were, edits included
+      const files = [...text.matchAll(/CONFLICT \([^)]*\): (?:Merge conflict in )?(\S+)/g)].map((m) => m[1]);
+      throw fail(`Your commits and the remote's both change ${files.length ? files.slice(0, 3).join(", ") : "the same files"}. Nothing was pulled; merge them in a terminal.`, 409);
+    }
+    if (SIGN_IN.test(text)) throw signInFailed(repo.remote);
+    throw e;
+  }
+  fetchedAt.set(dir, Date.now());
+  const pulled = Number((await git(dir, ["rev-list", "--count", `${before}..@{u}`])).trim());
+  const changed = pulled ? (await git(dir, ["diff", "--name-only", before, "@{u}"])).split("\n").filter(Boolean) : [];
+  return {
+    repos: await listRepos(),
+    pulled,
+    appChanged: changed.some((p) => p.startsWith("app/")),
+    stashConflict: /autostash resulted in conflicts|changes are safe in the stash/i.test(said),
+  };
 }
 
 // https://host/path, ssh://..., git@host:path, or a local folder (absolute path)

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { Repo, RepoChange } from "../types";
 
@@ -24,8 +24,17 @@ function ago(ms: number): string {
   return `${Math.round(m / 1440)}d ago`;
 }
 
-/** Git for the library and the app: what changed, commit it, push it. */
+interface PullResult { repos: Repo[]; pulled: number; appChanged: boolean; stashConflict: boolean }
+
+/** Git for the library and the app: what changed, commit it, pull and push it. */
 export function ChangesPanel({ repos, setRepos, toast }: Props) {
+  // fetch while this is open, so "to pull" is current (the server limits it to once a minute)
+  useEffect(() => {
+    const load = () => api<Repo[]>("/api/repos?fetch=1").then(setRepos).catch(() => {});
+    load();
+    addEventListener("focus", load);
+    return () => removeEventListener("focus", load);
+  }, [setRepos]);
   if (!repos.length) return <div className="sec muted">Neither the library nor the app is a git repository.</div>;
   return <>{repos.map((r) => <RepoSection key={r.id} repo={r} setRepos={setRepos} toast={toast} />)}</>;
 }
@@ -33,7 +42,7 @@ export function ChangesPanel({ repos, setRepos, toast }: Props) {
 function RepoSection({ repo, setRepos, toast }: { repo: Repo } & Omit<Props, "repos">) {
   const [message, setMessage] = useState("");
   const [remote, setRemote] = useState("");
-  const [busy, setBusy] = useState<"commit" | "push" | "remote" | null>(null);
+  const [busy, setBusy] = useState<"commit" | "pull" | "push" | "remote" | null>(null);
   const [all, setAll] = useState(false);
 
   const act = async (kind: "commit" | "push" | "remote", fn: () => Promise<Repo[]>, done: string) => {
@@ -46,6 +55,17 @@ function RepoSection({ repo, setRepos, toast }: { repo: Repo } & Omit<Props, "re
     () => api<Repo[]>(`/api/repos/${repo.id}/commit`, { method: "POST", json: { message: message.trim() || repo.suggestion } }), "Committed.");
   const doPush = () => act("push", () => api<Repo[]>(`/api/repos/${repo.id}/push`, { method: "POST" }),
     `Pushed to ${repo.remote ? shortRemote(repo.remote) : "the remote"}.`);
+  const doPull = async () => {
+    setBusy("pull");
+    try {
+      const r = await api<PullResult>(`/api/repos/${repo.id}/pull`, { method: "POST" });
+      setRepos(r.repos);
+      if (r.stashConflict) toast("Pulled, but your uncommitted edits clash with it. They're kept in git's stash: run git stash pop in a terminal.", true);
+      else toast(!r.pulled ? "Already up to date."
+        : `Pulled ${r.pulled} ${r.pulled === 1 ? "commit" : "commits"}.${r.appChanged ? " The app's code changed: restart Print Bay to use it." : ""}`);
+    } catch (e) { toast((e as Error).message, true); }
+    setBusy(null);
+  };
   const doRemote = () => act("remote", () => api<Repo[]>(`/api/repos/${repo.id}/remote`, { method: "PUT", json: { url: remote } }), "Remote saved.");
 
   const n = repo.changes.length;
@@ -101,9 +121,11 @@ function RepoSection({ repo, setRepos, toast }: { repo: Repo } & Omit<Props, "re
       )}
 
       {repo.remote ? (
-        <div className="grid2" style={{ marginTop: 12 }}>
+        <div className="grid3" style={{ marginTop: 12 }}>
           <button className={`cta cta-md${n ? " go" : ""}`} disabled={!n || !!busy} onClick={doCommit}>{busy === "commit" ? "Committing…" : "Commit"}</button>
-          <button className={`cta cta-md${!n && unpushed ? " go" : ""}`} disabled={!unpushed || !!busy} onClick={doPush}>{busy === "push" ? "Pushing…" : "Push"}</button>
+          <button className={`cta cta-md${!n && repo.behind ? " go" : ""}`} disabled={!repo.upstream || !!busy} onClick={doPull}
+            title={repo.upstream ? `Pull from ${repo.upstream}` : "Push once first"}>{busy === "pull" ? "Pulling…" : repo.behind ? `Pull ${repo.behind}` : "Pull"}</button>
+          <button className={`cta cta-md${!n && !repo.behind && unpushed ? " go" : ""}`} disabled={!unpushed || !!busy} onClick={doPush}>{busy === "push" ? "Pushing…" : "Push"}</button>
         </div>
       ) : (
         <>

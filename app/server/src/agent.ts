@@ -69,6 +69,9 @@ function emit(s: AgentSession, now = false) {
   else pending ??= setTimeout(flush, 80);
 }
 
+/** Whether Claude is editing files right now (git waits for it). */
+export const anyRunning = () => children.size > 0;
+
 export function getSession(id: string): AgentSession {
   let s = sessions.get(id);
   if (!s) {
