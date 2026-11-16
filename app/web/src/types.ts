@@ -1,8 +1,8 @@
 // Mirrors of the server's API shapes (app/server/src). Keep in sync by hand.
 
 /** What a spool is made of, as far as slicing cares (the printer's setting for the slot). */
-export type Material = "pla" | "wood" | "silk";
-export const MATERIAL_NAMES: Record<Material, string> = { pla: "PLA", wood: "Wood", silk: "Silk" };
+export type Material = "pla" | "wood" | "silk" | "stone";
+export const MATERIAL_NAMES: Record<Material, string> = { pla: "PLA", wood: "Wood", silk: "Silk", stone: "Stone" };
 /** A spool the printer reports: a CFS slot (T1A..T4D), or "EXT", the holder outside it (remain unknown). */
 export interface Slot { slot: string; tool: number; color: string; remain: number | null; material: Material }
 export const slotName = (slot: string) => (slot === "EXT" ? "outside spool" : slot);
@@ -36,7 +36,7 @@ export interface ModelJob {
   stale: boolean;
   slicing: boolean;
   plates: { perPlate: number; stats: Stats | null; stale: boolean }[]; // slices with several on one plate
-  materials: Record<Exclude<Material, "pla">, { stats: Stats | null; stale: boolean }>; // sliced for a wood-fill or silk spool
+  materials: Record<Exclude<Material, "pla">, { stats: Stats | null; stale: boolean }>; // sliced for a wood-fill, silk or stone spool
   plate: { job: string; count: number }[] | null; // a plate of the model's parts: what's on it
   oneColor: Record<Material, { stats: Stats | null; stale: boolean }> | null; // a multi-colour job sliced for one spool
 }

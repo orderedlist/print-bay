@@ -460,8 +460,8 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <span style={{ flexGrow: 1 }}>Material</span>
                     <div className="seg seg-sm" role="radiogroup" aria-label="Material" style={{ flex: "none" }}
-                      title={perPlate > 1 ? "Wood and silk are set up for one to a plate" : undefined}>
-                      {(["pla", "silk", "wood"] as const).map((m) => (
+                      title={perPlate > 1 ? "Wood, silk and stone are set up for one to a plate" : undefined}>
+                      {(["pla", "silk", "wood", "stone"] as const).map((m) => (
                         <button key={m} role="radio" aria-checked={material === m} disabled={perPlate > 1 && m !== "pla"}
                           onClick={() => setMaterialPick(m)} style={{ padding: "0 10px" }}>{MATERIAL_NAMES[m]}</button>
                       ))}
@@ -470,7 +470,9 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
                   {material !== "pla" && <div className="faint" style={{ fontSize: 12 }}>
                     {material === "wood"
                       ? "Wood fill: 210 °C, slower walls and longer retraction, so it strings less."
-                      : "Silk: flow capped at 10 mm³/s, so walls print slower and keep their sheen."}
+                      : material === "stone"
+                        ? "Stone fill: a 60 °C bed and 225 °C for the first layer so it grips, flow capped at 12 mm³/s. Use a 0.6 mm nozzle."
+                        : "Silk: flow capped at 10 mm³/s, so walls print slower and keep their sheen."}
                     {materialPick && materialPick !== spoolMaterial ? "" : ` The printer has this spool set as ${material}.`}
                   </div>}
                 </div>
