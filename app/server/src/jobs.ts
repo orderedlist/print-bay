@@ -81,20 +81,22 @@ const mtime = (file: string) => (fs.existsSync(file) ? fs.statSync(file).mtimeMs
  * folder (imported SVG art, a shared module), so the newest file there counts: editing only the art
  * still re-renders the mesh and marks slices stale. Notes (.md) and hidden files don't count.
  */
+const times = new Map<string, number>(); // for one tick: a model listing asks about the same folders many times
 export function modelTime(rel: string): number {
-  const own = mtime(abs(rel));
-  const [top, id] = rel.split("/");
-  if (!/\.(scad|py)$/.test(rel) || top !== "models" || !id || rel === `models/${id}`) return own;
-  let newest = own;
-  const walk = (dir: string) => {
-    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (e.name.startsWith(".") || e.name.endsWith(".md")) continue;
-      const p = path.join(dir, e.name);
-      if (e.isDirectory()) walk(p);
-      else newest = Math.max(newest, fs.statSync(p).mtimeMs);
+  const id = rel.match(/^models\/([^/]+)\/.+\.(scad|py)$/)?.[1];
+  if (!id) return mtime(abs(rel));
+  let newest = times.get(id);
+  if (newest === undefined) {
+    const dir = abs(`models/${id}`);
+    newest = 0;
+    for (const f of fs.readdirSync(dir, { recursive: true }) as string[]) {
+      if (f.endsWith(".md") || f.split(path.sep).some((part) => part.startsWith("."))) continue;
+      const stat = fs.statSync(path.join(dir, f));
+      if (stat.isFile()) newest = Math.max(newest, stat.mtimeMs);
     }
-  };
-  walk(abs(`models/${id}`));
+    if (!times.size) setImmediate(() => times.clear());
+    times.set(id, newest);
+  }
   return newest;
 }
 
@@ -215,9 +217,10 @@ export function isStale(job: Job, perPlate = 1, material: Material = "pla", oneC
   if (!sliced) return true;
   const profiles = { ...job.profiles, ...(material === "pla" ? {} : { filament: MATERIAL_PROFILES[material] }) };
   const nozzle = getNozzle();
-  const parts = (job.plate ?? []).map((p) => listJobs().find((j) => j.name === p.job)).filter((j): j is Job => !!j)
-    .flatMap((j) => [mtime(abs(j.file)), modelTime(j.model)]); // a plate: its parts' jobs and models too
-  const inputs = [modelTime(job.model), mtime(abs(job.file)), ...parts, ...[...Object.values(profiles), ...NOZZLE_PROFILES[nozzle]].map((p) => mtime(abs(p)))];
+  const parts = (job.plate ?? []).map((p) => listJobs().find((j) => j.name === p.job)).filter((j): j is Job => !!j); // a plate: its parts' jobs and models too
+  const t = (p: string) => mtime(abs(p));
+  const inputs = [job, ...parts].flatMap((j) => [t(j.file), modelTime(j.model)])
+    .concat([...Object.values(profiles), ...NOZZLE_PROFILES[nozzle]].map(t));
   return inputs.some((t) => t > sliced);
 }
 
