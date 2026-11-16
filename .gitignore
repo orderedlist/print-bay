@@ -10,3 +10,9 @@ app/web/dist/
 settings.json
 app/desktop/build/
 app/desktop/release/
+
+# The library (models, jobs, plates) is its own private repo, ~/dev/3d-prints-library:
+# downloaded models are licensed for personal use only, and this repo is public.
+models/
+jobs/
+plates/
