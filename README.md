@@ -1,4 +1,4 @@
-# 3d-prints
+# Print Bay
 
 Print Bay and the scripts for printing on the Creality K2 Combo (Moonraker at
 `192.168.4.42:7125`). The models, jobs and plates live in a library of their
@@ -27,7 +27,8 @@ profiles/, costs.toml, gcode/ (sliced output, not committed)
 ## Setup
 
 ```
-cd ~/dev/3d-prints
+git clone https://github.com/orderedlist/print-bay.git
+cd print-bay
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python scripts/k2.py info
