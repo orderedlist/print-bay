@@ -2,7 +2,7 @@
 // The server keeps listening on the LAN, so a phone browser works while this is open.
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { app, BrowserWindow, dialog, shell } from "electron";
 
 // The environment as launched, before the server adds to it (PRINT_BAY_DATA above all):
@@ -54,6 +54,8 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  // packaged, the icon comes from the bundle (electron-builder's mac.icon); run from a checkout, set it here
+  if (!app.isPackaged && process.platform === "darwin") app.dock?.setIcon(fileURLToPath(new URL("icon.png", import.meta.url)));
   const { start } = await loadServer();
   const serverOptions = {
     quiet: true,
