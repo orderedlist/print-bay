@@ -239,7 +239,8 @@ export function meshFor(modelId: string, opts: { print?: boolean; job?: string }
   const parts = src.endsWith(".scad") ? job?.parts ?? [] : [];
   // layout: 2 = 3MFs placed as their build lays them out (earlier caches stacked every object at its origin)
   const fill = src.endsWith(".3mf") ? job?.fillBase : undefined;
-  const key = JSON.stringify({ mtime: modelTime(file), params, parts, ...(src.endsWith(".3mf") ? { layout: 2, object, fill } : {}) });
+  // the file is in the key: jobs pointing at different sources in one model folder share a modelTime and a cache name
+  const key = JSON.stringify({ file, mtime: modelTime(file), params, parts, ...(src.endsWith(".3mf") ? { layout: 2, object, fill } : {}) });
   if (fs.existsSync(dest) && fs.existsSync(stamp) && fs.readFileSync(stamp, "utf8") === key)
     return Promise.resolve(dest);
 

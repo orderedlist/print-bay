@@ -87,13 +87,17 @@ export function modelTime(rel: string): number {
   if (!id) return mtime(abs(rel));
   let newest = times.get(id);
   if (newest === undefined) {
-    const dir = abs(`models/${id}`);
-    newest = 0;
-    for (const f of fs.readdirSync(dir, { recursive: true }) as string[]) {
-      if (f.endsWith(".md") || f.split(path.sep).some((part) => part.startsWith("."))) continue;
-      const stat = fs.statSync(path.join(dir, f));
-      if (stat.isFile()) newest = Math.max(newest, stat.mtimeMs);
-    }
+    let max = 0;
+    const walk = (dir: string): void => { // never enters hidden folders (.git, .venv)
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (e.name.startsWith(".")) continue;
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (e.isFile() && !e.name.endsWith(".md")) max = Math.max(max, fs.statSync(p).mtimeMs);
+      }
+    };
+    walk(abs(`models/${id}`));
+    newest = max;
     if (!times.size) setImmediate(() => times.clear());
     times.set(id, newest);
   }
