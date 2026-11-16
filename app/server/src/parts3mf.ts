@@ -119,6 +119,6 @@ export function write(parts: [string, string, number][], dest: string, name = "m
       + '<Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>'),
     "3D/3dmodel.model": strToU8(model),
     "Metadata/model_settings.config": strToU8(settings),
-  }));
+  }, { level: 0 })); // a scratch file for OrcaSlicer: no need to compress
   return dest;
 }

@@ -6,7 +6,10 @@ import path from "node:path";
 import { DATA } from "./config.js";
 import { isMaterial } from "./jobs.js";
 import { isNozzle, NOZZLES } from "./nozzle.js";
-import { gcodeFor, loadJob, sliceJob, type SliceOptions } from "./slicer.js";
+import { gcodeFor, loadJob, sliceJob, stopPrograms, type SliceOptions } from "./slicer.js";
+
+// stopped (the app quit, or Ctrl-C): stop OrcaSlicer or OpenSCAD too, rather than leave them running
+for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(signal, () => { stopPrograms(); process.exit(1); });
 
 const args = process.argv.slice(2);
 const usage = "usage: scripts/slice <job.toml> [--per-plate N] [--material wood|silk] [--nozzle 0.6] [--one-color] [--path-only]";

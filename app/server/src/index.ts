@@ -13,7 +13,7 @@ import { checkModel } from "./modelchecks.js";
 import { toolpathsFor } from "./gcode.js";
 import * as moonraker from "./moonraker.js";
 import { getQueue, print, removeEntry, startNext } from "./printing.js";
-import { isSlicing, slice } from "./slice.js";
+import { isSlicing, slice, stopSlices } from "./slice.js";
 import * as agent from "./agent.js";
 import * as repos from "./repos.js";
 import * as settings from "./settings.js";
@@ -41,7 +41,7 @@ export async function start(opts: StartOptions = {}) {
     if (!closed) poll = setTimeout(pollStatus, 2000);
   };
   void pollStatus();
-  app.addHook("onClose", async () => { closed = true; if (poll) clearTimeout(poll); });
+  app.addHook("onClose", async () => { closed = true; if (poll) clearTimeout(poll); stopSlices(); });
 
   // Files change outside the app too (CLI slices, nurb exports, hand edits):
   // tell browsers to refresh models when they do, coalescing bursts.

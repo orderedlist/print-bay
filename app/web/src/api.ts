@@ -37,7 +37,10 @@ export function useLive(): Live {
     es.addEventListener("slice", (e) => {
       const ev: SliceEvent = JSON.parse((e as MessageEvent).data);
       setLive((l) => {
-        const prev = ev.line.startsWith("Slicing jobs/") ? [] : l.slice[ev.job] ?? [];
+        // a new slice (of a job or a plate) starts a fresh log; "Still slicing…" replaces the last one
+        const started = /^Slicing (jobs|plates)\//.test(ev.line);
+        let prev = started ? [] : l.slice[ev.job] ?? [];
+        if (ev.line.startsWith("Still slicing") && prev[prev.length - 1]?.line.startsWith("Still slicing")) prev = prev.slice(0, -1);
         return { ...l, slice: { ...l.slice, [ev.job]: [...prev, ev].slice(-200) } };
       });
     });
