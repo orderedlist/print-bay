@@ -81,3 +81,36 @@ export interface AgentSession {
   cost: number;
   createdAt: number;
 }
+
+export interface RepoChange { path: string; status: "added" | "modified" | "deleted" | "renamed" | "conflict" }
+export interface Repo {
+  id: "library" | "app";
+  name: string;
+  path: string;
+  branch: string | null;
+  remote: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  lastCommit: { hash: string; subject: string; at: number } | null;
+  changes: RepoChange[];
+  suggestion: string;
+}
+
+export type ToolName = "orca" | "openscad" | "claude" | "git" | "nurb";
+export type SettingSource = "env" | "settings" | "found" | "default" | "missing";
+export interface ToolStatus {
+  name: ToolName; label: string; purpose: string; required: boolean;
+  path: string; source: SettingSource; ok: boolean; problem: string | null; install: string;
+}
+export interface Rates { filament_per_kg: number; printer_watts: number; power_per_kwh: number }
+export interface Caps { slice: boolean; openscad: boolean; claude: boolean; git: boolean; nurb: boolean }
+export interface SettingsView {
+  needsSetup: boolean;
+  printer: { host: string | null; source: SettingSource };
+  tools: ToolStatus[];
+  rates: Rates;
+  library: { path: string; source: "env" | "chosen" | "checkout" | "default"; fresh: boolean; next: string | null; default: string };
+  desktop: { restart: boolean; pickFolder: boolean };
+  caps: Caps;
+}

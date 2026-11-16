@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type * as THREE from "three";
 import { api, colorName, duration, inches, kindLabel, money, title, useAgentSession, type Live } from "../api";
@@ -7,7 +7,7 @@ import { ModelViewer, SEVERITY_COLORS, type ViewAvailability, type ViewMode } fr
 import { Params } from "../components/Params";
 import { ICONS, Toolbar, type Action } from "../components/Toolbar";
 import type { Theme } from "../theme";
-import { IDLE_STATES, type AgentSession, type CheckReport, MATERIAL_NAMES, type Material, type Model, type ScadParam, slotName } from "../types";
+import { IDLE_STATES, type AgentSession, type Caps, type CheckReport, MATERIAL_NAMES, type Material, type Model, type ScadParam, slotName } from "../types";
 import { plateFit } from "../plate";
 import { stateLabel } from "./PrinterPanel";
 
@@ -63,6 +63,7 @@ function Section({ icon, label, open, toggle, children, extra, action }: {
 interface Props {
   model: Model;
   live: Live;
+  caps: Caps; // what's set up on this computer: no Claude Code, no Claude tab
   tab: InspectorTab;
   setTab: (tab: InspectorTab) => void;
   theme: Theme;
@@ -74,13 +75,14 @@ interface Props {
   goPrinter: () => void;
   newModel: () => void;
   toast: (msg: string, error?: boolean) => void;
+  /** The part being viewed (a job of a multi-part model); kept by App, so it's still there after visiting another tab. */
+  jobName: string | null;
+  setJobName: (job: string | null) => void;
 }
 
 /** A selected model: on the stage, with the bottom toolbar and the inspector beside it. */
-export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, shift, inspectorSlot, close, goPrinter, newModel, toast }: Props) {
+export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTheme, shift, inspectorSlot, close, goPrinter, newModel, toast, jobName, setJobName }: Props) {
   // a multi-part model (labelled jobs, say a plant and its pot) prints one part at a time
-  const [jobName, setJobName] = useState<string | null>(null);
-  useEffect(() => setJobName(null), [model.id]);
   const job = model.jobs.find((j) => j.name === jobName) ?? model.jobs[0];
   const partGroups = pickerGroups(model.jobs);
   // ---- plates: several parts printed at once ----
@@ -99,9 +101,26 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
     setJobName(r.name);
     setTab("print");
   });
-  const setOnPlate = (part: string, n: number) => job?.plate && plateCall(() => api(`/api/plates/${job.name}`, {
-    method: "PUT", json: { counts: { ...Object.fromEntries(job.plate!.map((p) => [p.job, p.count])), [part]: n } },
-  }));
+  // A plate's counts change on the click; the save follows once the clicks stop, and the
+  // draft gives way when the saved plate comes back from the server.
+  const savedCounts: Record<string, number> = Object.fromEntries((job?.plate ?? []).map((p) => [p.job, p.count]));
+  const [draft, setDraft] = useState<{ plate: string; counts: Record<string, number> } | null>(null);
+  const counts = draft && draft.plate === job?.name ? draft.counts : savedCounts;
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => { // the server has it: drop the draft
+    if (draft && draft.plate === job?.name && Object.entries(draft.counts).every(([k, n]) => (savedCounts[k] ?? 0) === n)) setDraft(null);
+  }); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { if (saveTimer.current) clearTimeout(saveTimer.current); }, []);
+  const setOnPlate = (part: string, n: number) => {
+    if (!job?.plate) return;
+    const next = { plate: job.name, counts: { ...counts, [part]: n } };
+    setDraft(next);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      api(`/api/plates/${next.plate}`, { method: "PUT", json: { counts: next.counts } })
+        .catch((e) => { toast((e as Error).message, true); setDraft(null); });
+    }, 350);
+  };
   const deletePlate = () => job?.plate && plateCall(async () => {
     await api(`/api/plates/${job.name}`, { method: "DELETE" });
     setJobName(null);
@@ -132,6 +151,8 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
   }, [model.id, model.meshKey, live.modelsVersion, drawn, job?.name]);
   const issues = checks ? checks.findings.filter((f) => f.severity !== "info").length : 0;
 
+  useEffect(() => { if (!caps.claude && tab === "claude") setTab("print"); }, [caps.claude, tab, setTab]);
+
   // ---- Claude ----
   const [agentId, setAgentId] = useState<string | null>(null);
   const session = useAgentSession(agentId, live);
@@ -147,7 +168,7 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
       return s;
     } catch (e) { toast((e as Error).message, true); return null; }
   };
-  useEffect(() => { if (tab === "claude" && canEdit && !agentId) openAgent(); }, [tab, agentId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (tab === "claude" && caps.claude && canEdit && !agentId) openAgent(); }, [tab, agentId]); // eslint-disable-line react-hooks/exhaustive-deps
   /** "Analyze and correct": a review pass by Claude using every rule it knows plus the checks. */
   const analyze = async () => {
     const s = await openAgent();
@@ -264,9 +285,11 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
 
   const actions: Action[] = [
     { label: "Print…", icon: ICONS.print, run: print, disabled: !job || !chosen, accent: true },
-    { label: slicing ? "Slicing…" : "Re-slice", icon: ICONS.slice, run: slice, disabled: !job || slicing },
-    { label: "Analyze and correct", icon: ICONS.spark, run: analyze, disabled: !canEdit || session?.running, accent: true },
-    { label: "New model with Claude", icon: ICONS.plus, run: newModel },
+    { label: slicing ? "Slicing…" : caps.slice ? "Re-slice" : "Re-slice (set up OrcaSlicer in Settings)", icon: ICONS.slice, run: slice, disabled: !job || slicing || !caps.slice },
+    ...(caps.claude ? [
+      { label: "Analyze and correct", icon: ICONS.spark, run: analyze, disabled: !canEdit || session?.running, accent: true },
+      { label: "New model with Claude", icon: ICONS.plus, run: newModel },
+    ] : []),
   ];
 
   const [stateText, stateColor] = stateLabel(status?.state ?? "offline");
@@ -310,9 +333,11 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
               Print{issues > 0 && <span className="badge-n" aria-label={`${issues} check findings`}>{issues}</span>}
             </button>
             <button role="tab" aria-selected={tab === "design"} onClick={() => setTab("design")}>Design</button>
-            <button role="tab" aria-selected={tab === "claude"} onClick={() => setTab("claude")}>
-              Claude{session?.running && <span className="spinner" aria-label="working" />}
-            </button>
+            {caps.claude && (
+              <button role="tab" aria-selected={tab === "claude"} onClick={() => setTab("claude")}>
+                Claude{session?.running && <span className="spinner" aria-label="working" />}
+              </button>
+            )}
           </div>
         </div>
 
@@ -367,8 +392,8 @@ export function ModelWorkspace({ model, live, tab, setTab, theme, toggleTheme, s
               <Section label={`On ${job.label ?? "this plate"}`}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {plateParts.map((p) => {
-                    const n = job.plate!.find((x) => x.job === p.name)?.count ?? 0;
-                    const total = job.plate!.reduce((t, x) => t + x.count, 0);
+                    const n = counts[p.name] ?? 0;
+                    const total = Object.values(counts).reduce((t, x) => t + x, 0);
                     return (
                       <div key={p.name} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         {p.hex && <span className="dot" style={{ width: 10, height: 10, background: p.hex }} />}

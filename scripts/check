@@ -1,0 +1,13 @@
+#!/bin/zsh
+# Printability checks for a model as it will be sliced (app/server/dist/check-cli.js):
+#   scripts/check tote-rack
+# A plain path, so Claude's permission rules can name it. Inside the packaged app there's no
+# `node`, so the app passes its own binary as PRINT_BAY_NODE and runs it as Node.
+set -e
+root=${0:A:h:h}
+if [[ -n $PRINT_BAY_NODE ]]; then
+  ELECTRON_RUN_AS_NODE=1 exec "$PRINT_BAY_NODE" "$root/app/server/dist/check-cli.js" "$@"
+fi
+# Node as the app repo pins it (mise picks a version by folder, and this may run from anywhere)
+node=$(cd "$root" && command -v mise >/dev/null && mise which node 2>/dev/null) || node=node
+exec "$node" "$root/app/server/dist/check-cli.js" "$@"

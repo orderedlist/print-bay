@@ -1,10 +1,10 @@
-// Print Bay server: a typed API over the printer and this repo, plus the web UI.
+// Print Bay server: a typed API over the printer and the user's library, plus the web UI.
 // Exported as start() so the Electron shell can run it in-process.
 import fs from "node:fs";
 import path from "node:path";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
-import { CAMERA_URL, HOST, K2_HOST, PORT, ROOT, WEB_DIST } from "./config.js";
+import { CAMERA_URL, DATA, HOST, K2_HOST, normalizeHost, PORT, WEB_DIST } from "./config.js";
 import { bus, publish } from "./events.js";
 import { getJob, getModel, isMaterial, listJobs, listModels, rates, scadParams, setScadParams, writePlate } from "./jobs.js";
 import { meshFor } from "./mesh.js";
@@ -15,25 +15,40 @@ import * as moonraker from "./moonraker.js";
 import { getQueue, print, removeEntry, startNext } from "./printing.js";
 import { isSlicing, slice } from "./slice.js";
 import * as agent from "./agent.js";
+import * as repos from "./repos.js";
+import * as settings from "./settings.js";
 
-export interface StartOptions { port?: number; host?: string; quiet?: boolean }
+export interface StartOptions {
+  port?: number;
+  host?: string;
+  quiet?: boolean;
+  /** The desktop app can restart itself (to open another library) and show a folder picker. */
+  restart?: () => void;
+  pickFolder?: () => Promise<string | null>;
+}
 
 export async function start(opts: StartOptions = {}) {
   const app = Fastify({ logger: !opts.quiet && { level: "warn" } });
-  let status = await moonraker.getStatus();
-
-  const poll = setInterval(async () => {
+  await repos.ensureLibraryRepo().catch((e) => console.warn(`Couldn't make the library a git repo: ${e.message}`));
+  // Listen right away; the printer may be off or its name slow to resolve. Poll every 2 s
+  // after the last answer, so a slow printer never has requests piling up.
+  let status: moonraker.PrinterStatus = { ...moonraker.OFFLINE, message: "Connecting to the printer…" };
+  let closed = false;
+  let poll: NodeJS.Timeout | null = null;
+  const pollStatus = async () => {
     status = await moonraker.getStatus();
     publish("status", status);
-  }, 2000);
-  app.addHook("onClose", async () => clearInterval(poll));
+    if (!closed) poll = setTimeout(pollStatus, 2000);
+  };
+  void pollStatus();
+  app.addHook("onClose", async () => { closed = true; if (poll) clearTimeout(poll); });
 
   // Files change outside the app too (CLI slices, nurb exports, hand edits):
   // tell browsers to refresh models when they do, coalescing bursts.
   let refresh: NodeJS.Timeout | null = null;
-  const watchers = ["models", "jobs", "gcode"].flatMap((dir) => {
+  const watchers = ["models", "jobs", "plates", "gcode"].flatMap((dir) => {
     try {
-      return [fs.watch(path.join(ROOT, dir), { recursive: true }, () => {
+      return [fs.watch(path.join(DATA, dir), { recursive: true }, () => {
         if (refresh) clearTimeout(refresh);
         refresh = setTimeout(() => publish("models", null), 750);
       })];
@@ -132,9 +147,9 @@ export async function start(opts: StartOptions = {}) {
   });
   app.delete<{ Params: { name: string } }>("/api/plates/:name", async (req) => {
     const job = plateOf(req.params.name);
-    fs.rmSync(path.join(ROOT, job.file));
-    for (const f of fs.readdirSync(path.join(ROOT, "gcode"))) // its slices, for every material and nozzle
-      if (f.startsWith(`${job.name}.`) || f.startsWith(`${job.name}-`)) fs.rmSync(path.join(ROOT, "gcode", f), { recursive: true, force: true });
+    fs.rmSync(path.join(DATA, job.file));
+    for (const f of fs.readdirSync(path.join(DATA, "gcode"))) // its slices, for every material and nozzle
+      if (f.startsWith(`${job.name}.`) || f.startsWith(`${job.name}-`)) fs.rmSync(path.join(DATA, "gcode", f), { recursive: true, force: true });
     publish("models", null);
     return { ok: true };
   });
@@ -170,6 +185,61 @@ export async function start(opts: StartOptions = {}) {
     return reply.type(`image/${ext}`).header("Cache-Control", "max-age=86400").send(fs.createReadStream(file));
   });
 
+  // ---- setup and settings ----
+  // Changing where the app reaches the printer, runs programs from, or pushes to: only from this computer.
+  const local = (ip: string) => /^(127\.|::1$|::ffff:127\.)/.test(ip);
+  const localOnly = (what: string) => Object.assign(new Error(`${what} from the computer running Print Bay`), { statusCode: 403 });
+  const desktop = { restart: !!opts.restart, pickFolder: !!opts.pickFolder };
+  app.get("/api/settings", async () => ({ ...settings.view(), desktop }));
+  app.put<{ Body: settings.SettingsUpdate }>("/api/settings", async (req) => {
+    if (!local(req.ip)) throw localOnly("Change settings");
+    const v = { ...settings.update(req.body ?? {}), desktop };
+    status = await moonraker.getStatus(); // a new printer address shows at once
+    publish("status", status);
+    return v;
+  });
+  app.post("/api/settings/scan-printers", async () => moonraker.scanForPrinters());
+  app.post<{ Body: { host: string } }>("/api/settings/test-printer", async (req) => {
+    const host = normalizeHost(req.body?.host ?? "");
+    return { host, ...(await moonraker.probe(host)) };
+  });
+  app.post("/api/library/pick", async (req) => {
+    if (!local(req.ip)) throw localOnly("Choose a folder");
+    if (!opts.pickFolder) throw Object.assign(new Error("Type the folder's path instead"), { statusCode: 409 });
+    return { path: await opts.pickFolder() };
+  });
+  app.post("/api/restart", async (req, reply) => {
+    if (!local(req.ip)) throw localOnly("Restart Print Bay");
+    if (!opts.restart) return reply.status(409).send({ error: "Restart the server yourself (npm start) to open the other library." });
+    setTimeout(opts.restart, 300); // answer first
+    return { ok: true };
+  });
+  app.post<{ Body: { url: string } }>("/api/library/start-from-remote", async (req) => {
+    if (!local(req.ip)) throw localOnly("Change the library");
+    const result = await repos.startFromRemote(req.body?.url ?? "", settings.view().library.fresh);
+    publish("models", null);
+    return result;
+  });
+
+  // ---- git: the library and the app's code ----
+  app.get<{ Querystring: { fetch?: string } }>("/api/repos", async (req) => {
+    if (req.query.fetch) await repos.fetchAll();
+    return repos.listRepos();
+  });
+  app.post<{ Params: { id: string } }>("/api/repos/:id/pull", async (req) => {
+    const result = await repos.pull(req.params.id);
+    if (result.pulled) publish("models", null);
+    return result;
+  });
+  app.post<{ Params: { id: string }; Body: { message: string } }>("/api/repos/:id/commit", async (req) =>
+    repos.commit(req.params.id, req.body?.message ?? ""));
+  app.post<{ Params: { id: string } }>("/api/repos/:id/push", async (req) => repos.push(req.params.id));
+  app.put<{ Params: { id: string }; Body: { url: string } }>("/api/repos/:id/remote", async (req, reply) => {
+    // where pushes go: only from this computer, not from anything else on the network
+    if (!local(req.ip)) return reply.status(403).send({ error: "Change the remote from the computer running Print Bay" });
+    return repos.setRemote(req.params.id, req.body?.url ?? "");
+  });
+
   // ---- live events ----
   app.get("/api/events", (req, reply) => {
     reply.hijack();
@@ -192,6 +262,11 @@ export async function start(opts: StartOptions = {}) {
 
   const port = opts.port ?? PORT;
   const host = opts.host ?? HOST;
-  await app.listen({ port, host });
+  try {
+    await app.listen({ port, host });
+  } catch (err) {
+    await app.close(); // stops the status polling and file watchers before the caller retries
+    throw err;
+  }
   return { app, url: `http://localhost:${port}` };
 }

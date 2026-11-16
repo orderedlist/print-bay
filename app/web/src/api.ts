@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AgentSession, Model, PrinterStatus, QueueState, SliceEvent } from "./types";
+import type { AgentSession, Model, PrinterStatus, QueueState, Repo, SettingsView, SliceEvent } from "./types";
 
 export async function api<T = unknown>(path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
   const { json, ...rest } = init ?? {};
@@ -52,6 +52,30 @@ export function useModels(version: number): Model[] | null {
     api<Model[]>("/api/models").then(setModels).catch(() => setModels([]));
   }, [version]);
   return models;
+}
+
+/** The git repos (library, app): refetched when files change, the window regains focus, or `set` is called after an action. */
+export function useRepos(version: number): [Repo[] | null, (r: Repo[]) => void] {
+  const [repos, setRepos] = useState<Repo[] | null>(null);
+  useEffect(() => {
+    const load = () => api<Repo[]>("/api/repos").then(setRepos).catch(() => setRepos([]));
+    load();
+    addEventListener("focus", load);
+    return () => removeEventListener("focus", load);
+  }, [version]);
+  return [repos, setRepos];
+}
+
+/** Setup and settings, refetched when the window regains focus (a tool may have been installed meanwhile). */
+export function useSettings(): [SettingsView | null, (s: SettingsView) => void] {
+  const [settings, setSettings] = useState<SettingsView | null>(null);
+  useEffect(() => {
+    const load = () => api<SettingsView>("/api/settings").then(setSettings).catch(() => {});
+    load();
+    addEventListener("focus", load);
+    return () => removeEventListener("focus", load);
+  }, []);
+  return [settings, setSettings];
 }
 
 // ---- formatting ----

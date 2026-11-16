@@ -1,12 +1,35 @@
 {
   "name": "@print-bay/desktop",
+  "productName": "Print Bay",
+  "version": "0.1.0",
+  "description": "A workspace for the Creality K2: models, slicing and printing",
   "private": true,
   "type": "module",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "bundle": "node bundle.mjs",
+    "dist": "node bundle.mjs && electron-builder --mac",
+    "dist:notarize": "node bundle.mjs && electron-builder --mac -c.mac.notarize=true"
+  },
+  "build": {
+    "appId": "com.boxoutdesigns.printbay",
+    "productName": "Print Bay",
+    "copyright": "Box Out Designs LLC",
+    "directories": { "output": "release" },
+    "files": ["main.js", "package.json"],
+    "extraResources": [{ "from": "build/printbay", "to": "printbay" }],
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["arm64"] }, { "target": "zip", "arch": ["arm64"] }],
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "notarize": false
+    },
+    "dmg": { "title": "Print Bay ${version}" }
   },
   "devDependencies": {
-    "electron": "^44.5.1"
+    "electron": "44.5.1",
+    "electron-builder": "^26.18.0",
+    "esbuild": "^0.28.2"
   }
 }

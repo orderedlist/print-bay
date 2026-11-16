@@ -46,6 +46,8 @@ export function ModelViewer({ model, job: shown, mode, setMode, theme, shift, on
   const job = shown && model.jobs.length > 1 ? (shown.stats ? shown : undefined) : model.jobs.find((j) => j.stats);
   const meshJob = shown ?? model.jobs[0];
   const jobQuery = meshJob ? `?job=${encodeURIComponent(meshJob.name)}` : "";
+  // a plate's mesh changes with what's on it, not with the model's files
+  const plateKey = meshJob?.plate ? JSON.stringify(meshJob.plate) : "";
   const pathsKey = job ? `${job.name}:${job.stats!.slicedAt}` : null;
 
   useEffect(() => {
@@ -75,7 +77,7 @@ export function ModelViewer({ model, job: shown, mode, setMode, theme, shift, on
       .catch((e) => alive && setLoading(`Couldn't load the model: ${e.message}`));
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stage, model.meshKey, meshJob?.name]);
+  }, [stage, model.meshKey, meshJob?.name, plateKey]);
 
   // toolpaths
   useEffect(() => {
@@ -104,7 +106,7 @@ export function ModelViewer({ model, job: shown, mode, setMode, theme, shift, on
       .catch(() => {});
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stage, model.meshKey, meshJob?.name]);
+  }, [stage, model.meshKey, meshJob?.name, plateKey]);
 
   // paint the picked filament colours, and again whenever a new mesh arrives
   useEffect(() => { if (stage && colors?.length) stage.recolor(colors); }, [stage, colorKey, meshVersion, layoutVersion]); // eslint-disable-line react-hooks/exhaustive-deps

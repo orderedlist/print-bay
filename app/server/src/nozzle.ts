@@ -1,5 +1,5 @@
 // The nozzle on the K2. Klipper's config always says 0.4 and Creality doesn't report a swap,
-// so it's set in the app and remembered here; slicing and printing use it (see NOZZLES in scripts/run.py).
+// so it's set in the app and remembered here; slicing and printing use it (see NOZZLE_PROFILES, which slicer.ts swaps in).
 import fs from "node:fs";
 import path from "node:path";
 import { CACHE } from "./config.js";

@@ -12,6 +12,8 @@
     "build": "npm run build -w server && npm run build -w web",
     "start": "npm run start -w server",
     "desktop": "npm run build && npm run start -w desktop",
+    "dist": "npm run build && npm run dist -w desktop",
+    "dist:notarize": "npm run build && npm run dist:notarize -w desktop",
     "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
     "test": "npm test -w web"
   }

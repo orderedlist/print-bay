@@ -1,18 +1,27 @@
 # 3d-prints
 
-Models, slicer profiles, and scripts for printing on the Creality K2 Combo
-(Moonraker at `192.168.4.42:7125`).
+Print Bay and the scripts for printing on the Creality K2 Combo (Moonraker at
+`192.168.4.42:7125`). The models, jobs and plates live in a library of their
+own, a separate private repo (here, `~/dev/3d-prints-library`; see Library
+below), so this repo is just the app.
 
 ```
-models/<name>/      downloaded .3mf/.stl + SOURCE.md (link, license)
-profiles/           OrcaSlicer presets exported as JSON
-jobs/<name>.toml    model + profiles + copy count
+profiles/           OrcaSlicer presets exported as JSON: what a new library starts with
 scripts/setup.py    install Orca, fetch the model, build profiles
 scripts/k2.py       printer CLI (status, upload, print, watch, pause...)
-scripts/run.py      slice a job with OrcaSlicer, then print it
+scripts/run.py      slice a job (through scripts/slice), then print it
+scripts/slice       Print Bay's slicer from the terminal (app/server/src/slicer.ts)
 app/                Print Bay: desktop/web app for the printer and the models
-costs.toml          filament and power rates for the app's cost estimates
-gcode/              sliced output (git-ignored)
+costs.toml          default filament and power rates for a new library
+```
+
+In the library:
+
+```
+models/<name>/      downloaded .3mf/.stl/.scad + SOURCE.md (link, license)
+jobs/<name>.toml    model + profiles + copy count
+plates/<name>.toml  several jobs' parts printed at once
+profiles/, costs.toml, gcode/ (sliced output, not committed)
 ```
 
 ## Setup
@@ -25,8 +34,9 @@ python scripts/k2.py info
 python scripts/setup.py jobs/stacking-box.toml
 ```
 
-Needs Python 3.11+ (for `tomllib`) and OrcaSlicer. If Orca isn't in
-`/Applications`, set `ORCA=/path/to/OrcaSlicer`.
+Needs Python 3.11+ (for `tomllib`), OrcaSlicer, and the app built once
+(`cd app && npm install && npm run build`): `run.py` slices with the app's
+slicer. If Orca isn't in `/Applications`, set `ORCA=/path/to/OrcaSlicer`.
 
 ## Profiles
 
@@ -72,7 +82,7 @@ Nozzle size in the printer panel; every slice and print follows it.
 A plate (`plates/<name>.toml`) prints several parts of a downloaded 3MF at once:
 Plant 3, Plant 6 and two funnels, say. On a multi-part model's page, **+ New
 plate** makes one and the plate panel sets how many of each part it holds.
-`run.py` copies each part's object (with its fill_base and modifiers) into one
+The slicer copies each part's object (with its fill_base and modifiers) into one
 3MF, gives each object the process overrides it doesn't share with the others,
 and has Orca arrange them on the bed. Parts in different colours get a filament
 each, but swap spools every layer, so a plate per colour is usually much faster.
@@ -81,6 +91,8 @@ colour with no swaps (`run.py --one-color`, `gcode/<job>-1c.gcode`); this works 
 multi-colour OpenSCAD jobs too.
 
 ## Adding a model
+
+In the library:
 
 1. Make `models/<name>/`, drop in the file (.3mf, .stl, or .scad), add `SOURCE.md`.
 2. Copy `jobs/stacking-box.toml` to `jobs/<name>.toml` and edit it.
@@ -117,10 +129,92 @@ npm start           # or just the server: http://localhost:8765 (also on the LAN
 npm run dev         # server with reload + Vite on :5173
 ```
 
-`app/server` (Fastify) talks to Moonraker and this repo and shells out to
-`scripts/run.py` for slicing; `app/web` is the React UI; `app/desktop` runs
-the server inside Electron. Settings come from the environment: `K2_HOST`,
-`PORT`, `BIND`, `OPENSCAD`, `PYTHON`.
+`app/server` (Fastify) talks to Moonraker and the library and slices with
+OrcaSlicer's CLI (`slicer.ts`: rendering, materials, nozzles, plates, base
+fills, one-colour slices), so the app needs no Python. It's the only slicer:
+`scripts/slice` runs it from the terminal and `run.py` slices through that, so
+changes to how jobs slice go in `slicer.ts`. `app/web` is the React UI;
+`app/desktop` runs the server inside Electron.
+
+### Building the Mac app
+
+```
+cd app
+npm run dist            # signed Print Bay.app, .dmg and .zip in desktop/release/
+npm run dist:notarize   # the same, notarized so it opens on other Macs without a warning
+```
+
+`desktop/bundle.mjs` stages what the app carries: the server and the checks
+CLI bundled with esbuild, the built UI, `scripts/check`, `scripts/nurb` and
+`nurb_part.py`, the K2 profiles and default rates. No models, jobs or slices.
+The app runs its own binary as Node for `scripts/check`, and links Claude's
+tools from `~/Library/Caches/PrintBay/bin` because their real path has a space.
+
+Signing uses the "Developer ID Application" certificate in your keychain.
+Notarizing also needs Apple credentials in the environment, for example
+`APPLE_KEYCHAIN_PROFILE` (a profile made with `xcrun notarytool
+store-credentials`), or `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and
+`APPLE_TEAM_ID`. The build is Apple silicon only. People who install it
+still need OrcaSlicer, and Claude Code, OpenSCAD and Git for those features.
+
+### Setup and Settings
+
+A new library opens on **Set up Print Bay**, which is **Settings** (the gear)
+from then on:
+- **Printer:** **Scan network** finds printers by asking every address on the
+  Mac's local network for Moonraker (port 7125; a few seconds), K2s first,
+  and runs by itself while no printer is set. Or type the address and Test
+  it. The K2 doesn't advertise itself over Bonjour, so give it a fixed
+  address in your router.
+- **Library:** where it is. While it's empty, you can give the remote of a
+  library pushed from another computer and it copies that instead.
+- **Programs:** OrcaSlicer (needed to slice), plus OpenSCAD, Claude Code, Git
+  and nurb (optional). Each is found
+  in the usual places or set by path, with install hints for what's missing.
+  Without Claude Code the Claude features hide; without Git, Changes hides.
+- **Costs:** the rates in `costs.toml`.
+
+The printer and program paths belong to each computer, so they're kept in the
+library's `settings.json`, which git never commits. Environment variables
+still win: `K2_HOST`, `ORCA`, `OPENSCAD`, `CLAUDE`, `GIT`,
+`NURB_PYTHON`, plus `PORT`, `BIND` and `PRINT_BAY_DATA`. A checkout that is
+its own library (like this repo) skips setup and keeps its old printer
+address (192.168.4.42). Only the computer running Print Bay can change settings.
+
+### Library
+
+The app keeps each person's models, jobs, profiles, G-code, `costs.toml` and
+cache in a library folder, apart from its code. Which folder, in order:
+1. `PRINT_BAY_DATA`, if set.
+2. The folder chosen in **Settings → Library → Use another folder…**, saved in
+   `~/Library/Application Support/Print Bay/library-location`. The desktop app
+   restarts into it; an empty or new folder becomes a new library.
+3. This checkout, while it has its own `jobs/`.
+4. `~/Library/Application Support/Print Bay/Library`, which starts empty with
+   the K2 profiles from `profiles/` and the rates from `costs.toml`.
+
+`run.py`, `setup.py` and `scripts/nurb` find it the same way, so the terminal
+scripts follow the app. The app passes it on to Claude's tools, and Claude
+chats run inside the library.
+
+### Changes (git)
+
+The library and the app's code are each a git repo, and the **Changes** tab
+commits and pushes them. A new library becomes a repo on first run, ignoring
+`gcode/` and `.cache/`. Commit takes everything that changed (`git add -A`),
+with a suggested message like "Update tote-rack". Push uses your own git
+sign-in (SSH key or credential helper) and never prompts, so push once from a
+terminal if it can't sign in. Without a remote, the tab asks for one, and only
+the computer running Print Bay can set it. In a checkout that is its own
+library, the library and the app are one repo.
+
+**Pull** rebases your commits onto the remote's and keeps uncommitted edits.
+It won't start if you've edited a file the pull changes (commit first), and if
+your commits and the remote's change the same lines it backs out with nothing
+changed, for you to merge in a terminal. The tab fetches while it's open, at
+most once a minute, so it can show what's waiting. Commit and Pull wait while
+Claude is editing. A pull that changes `app/` takes effect after a restart;
+changes to `scripts/` apply at once.
 
 ### Claude
 

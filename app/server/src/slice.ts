@@ -1,9 +1,10 @@
-// Slicing stays in scripts/run.py (OrcaSlicer CLI, profiles, filament reassignment).
-import { spawn } from "node:child_process";
-import { PYTHON, ROOT } from "./config.js";
+// Slicing jobs, one run per job and plate size, with progress over SSE (the work is in slicer.ts).
+import fs from "node:fs";
+import { ORCA } from "./config.js";
 import { publish } from "./events.js";
 import { getJob, type Material } from "./jobs.js";
 import { getNozzle, STOCK } from "./nozzle.js";
+import { sliceJob } from "./slicer.js";
 
 const running = new Map<string, Promise<void>>();
 
@@ -17,37 +18,22 @@ export function isSlicing(job: string) {
  */
 export function slice(jobName: string, perPlate = 1, material: Material = "pla", oneColor = false): Promise<void> {
   const job = getJob(jobName);
+  if (!fs.existsSync(ORCA)) throw Object.assign(new Error("OrcaSlicer isn't set up, so nothing can be sliced. Install it or set its path in Settings."), { statusCode: 409 });
   const nozzle = getNozzle();
   const key = `${job.name}${perPlate > 1 ? `@${perPlate}` : ""}${oneColor ? "@1c" : ""}${material === "pla" ? "" : `@${material}`}${nozzle === STOCK ? "" : `@${nozzle}mm`}`;
   if (running.has(key)) return running.get(key)!;
 
-  const work = new Promise<void>((resolve, reject) => {
+  const work = (async () => {
     publish("slice", { job: job.name, state: "running", line: `Slicing ${job.file}${oneColor ? " in one colour" : ""}${material === "pla" ? "" : ` for ${material}`}${nozzle === STOCK ? "" : ` (${nozzle} mm nozzle)`}…` });
-    const child = spawn(PYTHON, ["-u", "scripts/run.py", job.file, "--slice-only",
-      ...(perPlate > 1 ? ["--per-plate", String(perPlate)] : []), ...(material === "pla" ? [] : ["--material", material]),
-      ...(oneColor ? ["--one-color"] : []),
-      ...(nozzle === STOCK ? [] : ["--nozzle", nozzle])], { cwd: ROOT });
-    let tail = "";
-    const onData = (chunk: Buffer) => {
-      for (const line of chunk.toString().split("\n").filter(Boolean)) {
-        tail = (tail + "\n" + line).slice(-4000);
-        publish("slice", { job: job.name, state: "running", line });
-      }
-    };
-    child.stdout.on("data", onData);
-    child.stderr.on("data", onData);
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) {
-        publish("slice", { job: job.name, state: "done", line: "Sliced." });
-        publish("models", null);
-        resolve();
-      } else {
-        publish("slice", { job: job.name, state: "failed", line: `Slicing failed (exit ${code}).` });
-        reject(new Error(`Slicing ${job.name} failed:\n${tail.trim().split("\n").slice(-6).join("\n")}`));
-      }
-    });
-  }).finally(() => running.delete(key));
+    try {
+      await sliceJob(job.file, { perPlate, material, oneColor, nozzle }, (line) => publish("slice", { job: job.name, state: "running", line }));
+    } catch (e) {
+      publish("slice", { job: job.name, state: "failed", line: (e as Error).message });
+      throw new Error(`Slicing ${job.name} failed: ${(e as Error).message}`);
+    }
+    publish("slice", { job: job.name, state: "done", line: "Sliced." });
+    publish("models", null);
+  })().finally(() => running.delete(key));
 
   running.set(key, work);
   return work;

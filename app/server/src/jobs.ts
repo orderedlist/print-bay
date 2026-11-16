@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parse } from "smol-toml";
 import { execFileSync } from "node:child_process";
-import { NURB_PYTHON, ROOT } from "./config.js";
+import { APP_ROOT, DATA, NURB_PYTHON } from "./config.js";
 import { getNozzle, NOZZLE_PROFILES, STOCK, type Nozzle } from "./nozzle.js";
 
 export const COLORS: Record<string, string> = {
@@ -15,7 +15,7 @@ const MESH_TYPES = [".scad", ".3mf", ".stl"]; // plus nurb parts (.py), named by
 
 export interface Job {
   name: string;
-  file: string; // jobs/<name>.toml, relative to ROOT
+  file: string; // jobs/<name>.toml, relative to DATA
   model: string;
   color?: string;
   copies: number;
@@ -23,11 +23,11 @@ export interface Job {
   scad: Record<string, string>;
   /** Multi-colour OpenSCAD jobs: each part renders with -D part="<name>" and prints on filament 1, 2, ... in order. */
   parts: { name: string; color: string }[];
-  /** A downloaded 3MF holding several parts: the object this job prints (see scripts/run.py). */
+  /** A downloaded 3MF holding several parts: the object this job prints (see slicer.ts). */
   object?: string;
   /** What the model page's part picker calls this job. */
   label?: string;
-  /** A solid disc added under the object when slicing, filling a logo pressed into its base (see scripts/run.py). */
+  /** A solid disc added under the object when slicing, filling a logo pressed into its base (see slicer.ts). */
   fillBase?: { radius: number; height: number };
   /** A plate (plates/<name>.toml): other jobs' parts printed together, each this many times. */
   plate?: { job: string; count: number }[];
@@ -41,7 +41,7 @@ export interface Stats { time: string; seconds: number; grams: number; cost: Cos
 
 /**
  * What a spool is made of, as far as slicing cares: plain PLA uses the job's own filament
- * profile; the others swap in their own (see MATERIALS in scripts/run.py).
+ * profile; the others swap in their own (MATERIAL_PROFILES below; slicer.ts swaps them in).
  */
 export type Material = "pla" | "wood" | "silk";
 export type OtherMaterial = Exclude<Material, "pla">;
@@ -73,7 +73,7 @@ export interface Model {
   jobs: ModelJob[];
 }
 
-const abs = (rel: string) => path.join(ROOT, rel);
+const abs = (rel: string) => path.join(DATA, rel);
 const mtime = (file: string) => (fs.existsSync(file) ? fs.statSync(file).mtimeMs : 0);
 
 export function listJobs(): Job[] {
@@ -103,9 +103,9 @@ function readJobs(): Job[] {
 }
 
 /**
- * Plates (plates/*.toml, see scripts/run.py): a job made of other jobs' parts. It takes the
+ * Plates (plates/*.toml, sliced by slicer.ts): a job made of other jobs' parts. It takes the
  * first part's model and profiles; one colour prints as that colour, several as parts named
- * by what uses each (filament 1, 2, ... in the order they first appear, as run.py assigns them).
+ * by what uses each (filament 1, 2, ... in the order they first appear, as slicer.ts assigns them).
  */
 function readPlates(jobs: Job[]): Job[] {
   const dir = abs("plates");
@@ -163,8 +163,8 @@ export function cost(grams: number, secs: number, r = rates()): Cost {
 
 /**
  * gcode/<job>.gcode, gcode/<job>-x<n>.gcode for n laid out on one plate, then -<material>
- * for a spool that isn't PLA, then -<nozzle>mm for a nozzle that isn't the stock 0.4 (see
- * scripts/run.py). The nozzle is the one set in the app.
+ * for a spool that isn't PLA, then -<nozzle>mm for a nozzle that isn't the stock 0.4 (slicer.ts
+ * and scripts/slice use this too). The nozzle is the one set in the app unless given.
  */
 /** `oneColor`: a multi-colour job sliced all on one filament, for when every part comes from the same spool. */
 export const gcodePath = (job: string, perPlate = 1, material: Material = "pla", nozzle: Nozzle = getNozzle(), oneColor = false) =>
@@ -276,7 +276,7 @@ function nurbParams(job: Job): ScadParam[] {
   const time = mtime(file);
   let hit = nurbCache.get(file);
   if (!hit || hit.mtime !== time) {
-    const out = execFileSync(NURB_PYTHON, [abs("scripts/nurb_part.py"), file, "--params"], { cwd: ROOT, encoding: "utf8", timeout: 60_000 });
+    const out = execFileSync(NURB_PYTHON, [path.join(APP_ROOT, "scripts/nurb_part.py"), file, "--params"], { cwd: DATA, encoding: "utf8", timeout: 60_000 });
     hit = { mtime: time, params: JSON.parse(out) };
     nurbCache.set(file, hit);
   }
