@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { unzipSync, strFromU8 } from "fflate";
 import { APP_ROOT, CACHE, DATA, NURB_PYTHON, OPENSCAD } from "./config.js";
-import { getModel, getJob } from "./jobs.js";
+import { getModel, getJob, modelTime } from "./jobs.js";
 
 const run = promisify(execFile);
 type Vec = [number, number, number];
@@ -239,7 +239,8 @@ export function meshFor(modelId: string, opts: { print?: boolean; job?: string }
   const parts = src.endsWith(".scad") ? job?.parts ?? [] : [];
   // layout: 2 = 3MFs placed as their build lays them out (earlier caches stacked every object at its origin)
   const fill = src.endsWith(".3mf") ? job?.fillBase : undefined;
-  const key = JSON.stringify({ mtime: fs.statSync(src).mtimeMs, params, parts, ...(src.endsWith(".3mf") ? { layout: 2, object, fill } : {}) });
+  // the file is in the key: jobs pointing at different sources in one model folder share a modelTime and a cache name
+  const key = JSON.stringify({ file, mtime: modelTime(file), params, parts, ...(src.endsWith(".3mf") ? { layout: 2, object, fill } : {}) });
   if (fs.existsSync(dest) && fs.existsSync(stamp) && fs.readFileSync(stamp, "utf8") === key)
     return Promise.resolve(dest);
 
