@@ -76,6 +76,28 @@ export interface Model {
 const abs = (rel: string) => path.join(DATA, rel);
 const mtime = (file: string) => (fs.existsSync(file) ? fs.statSync(file).mtimeMs : 0);
 
+/**
+ * When a model last changed. An OpenSCAD model or nurb part can read other files from its model's
+ * folder (imported SVG art, a shared module), so the newest file there counts: editing only the art
+ * still re-renders the mesh and marks slices stale. Notes (.md) and hidden files don't count.
+ */
+export function modelTime(rel: string): number {
+  const own = mtime(abs(rel));
+  const [top, id] = rel.split("/");
+  if (!/\.(scad|py)$/.test(rel) || top !== "models" || !id || rel === `models/${id}`) return own;
+  let newest = own;
+  const walk = (dir: string) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.name.startsWith(".") || e.name.endsWith(".md")) continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else newest = Math.max(newest, fs.statSync(p).mtimeMs);
+    }
+  };
+  walk(abs(`models/${id}`));
+  return newest;
+}
+
 export function listJobs(): Job[] {
   const jobs = readJobs();
   return [...jobs, ...readPlates(jobs)];
@@ -194,8 +216,8 @@ export function isStale(job: Job, perPlate = 1, material: Material = "pla", oneC
   const profiles = { ...job.profiles, ...(material === "pla" ? {} : { filament: MATERIAL_PROFILES[material] }) };
   const nozzle = getNozzle();
   const parts = (job.plate ?? []).map((p) => listJobs().find((j) => j.name === p.job)).filter((j): j is Job => !!j)
-    .flatMap((j) => [j.file, j.model]); // a plate: its parts' jobs and models too
-  const inputs = [job.model, job.file, ...parts, ...Object.values(profiles), ...NOZZLE_PROFILES[nozzle]].map((p) => mtime(abs(p)));
+    .flatMap((j) => [mtime(abs(j.file)), modelTime(j.model)]); // a plate: its parts' jobs and models too
+  const inputs = [modelTime(job.model), mtime(abs(job.file)), ...parts, ...[...Object.values(profiles), ...NOZZLE_PROFILES[nozzle]].map((p) => mtime(abs(p)))];
   return inputs.some((t) => t > sliced);
 }
 
@@ -226,7 +248,7 @@ export function listModels(): Model[] {
         id,
         file: mesh,
         kind: mesh ? path.extname(mesh).slice(1) : null,
-        meshKey: mesh ? `${id}:${mtime(abs(mesh))}:${JSON.stringify([modelJobs[0]?.scad ?? {}, modelJobs[0]?.parts ?? []])}` : id,
+        meshKey: mesh ? `${id}:${modelTime(mesh)}:${JSON.stringify([modelJobs[0]?.scad ?? {}, modelJobs[0]?.parts ?? []])}` : id,
         source: fs.existsSync(sourceFile) ? fs.readFileSync(sourceFile, "utf8") : "",
         jobs: modelJobs.map((j) => ({
           name: j.name,
