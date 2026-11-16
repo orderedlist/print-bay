@@ -72,6 +72,14 @@ walls print slower and keep their sheen. `--material silk` writes
 `gcode/<job>-silk.gcode`, and the app picks Silk when the slot is set to
 Generic PLA-Silk or CR-Silk.
 
+Stone-filled PLA (marble, granite) uses `profiles/k2-stone.json`: the job's
+PLA with a 60 °C bed and 225 °C nozzle for the first layer (55 °C after) so it
+grips the textured plate, and flow capped at 12 mm³/s. Print it with a 0.6 mm
+nozzle. Creality has no filament id for it, so pick **Stone** in the app (or
+`--material stone`, which writes `gcode/<job>-stone.gcode`). A part whose first
+layer is a thin ring on its own, like the succulent pots' bases, also wants a
+brim in its job (`brim_type = "outer_only"`, `brim_width = "5"`).
+
 For a 0.6 mm nozzle, `run.py --nozzle 0.6` slices with
 `profiles/k2-machine-0.6.json` (Orca's "Creality K2 0.6 nozzle", with the same
 purge-line edit) and lays `profiles/k2-nozzle-0.6.json` over the job's process:

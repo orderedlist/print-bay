@@ -43,9 +43,13 @@ export interface Stats { time: string; seconds: number; grams: number; cost: Cos
  * What a spool is made of, as far as slicing cares: plain PLA uses the job's own filament
  * profile; the others swap in their own (MATERIAL_PROFILES below; slicer.ts swaps them in).
  */
-export type Material = "pla" | "wood" | "silk";
+export type Material = "pla" | "wood" | "silk" | "stone";
 export type OtherMaterial = Exclude<Material, "pla">;
-export const MATERIAL_PROFILES: Record<OtherMaterial, string> = { wood: "profiles/k2-wood.json", silk: "profiles/k2-silk.json" };
+export const MATERIAL_PROFILES: Record<OtherMaterial, string> = {
+  wood: "profiles/k2-wood.json", silk: "profiles/k2-silk.json",
+  // stone-filled PLA: a hotter bed (60 C first layer, 55 after) and 225 C first layer so it grips, flow capped at 12 mm3/s
+  stone: "profiles/k2-stone.json",
+};
 const OTHER_MATERIALS = Object.keys(MATERIAL_PROFILES) as OtherMaterial[];
 export const isMaterial = (m: unknown): m is Material => m === "pla" || (typeof m === "string" && m in MATERIAL_PROFILES);
 
@@ -60,7 +64,7 @@ export interface ModelJob {
   stale: boolean; // model, job or profiles changed since the last slice
   plates: { perPlate: number; stats: Stats | null; stale: boolean }[]; // sliced with several to a plate
   plate: { job: string; count: number }[] | null; // a plate of the model's parts: what's on it
-  materials: Record<OtherMaterial, { stats: Stats | null; stale: boolean }>; // sliced for a wood-fill or silk spool
+  materials: Record<OtherMaterial, { stats: Stats | null; stale: boolean }>; // sliced for a wood-fill, silk or stone spool
   oneColor: Record<Material, { stats: Stats | null; stale: boolean }> | null; // a multi-colour job sliced for one spool
 }
 

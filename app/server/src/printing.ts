@@ -92,7 +92,7 @@ async function startEntry(entry: QueueEntry) {
 /**
  * `color` is the spool for a one-colour job; `colors` gives each part of a
  * multi-colour job its spool (by part name), defaulting to the job's own colours.
- * `material` slices for that filament; left out, it's what the printer has a picked spool set as (wood, silk), else PLA.
+ * `material` slices for that filament; left out, it's what the printer has a picked spool set as (wood, silk; stone has no Creality id, so it's picked), else PLA.
  */
 export async function print(opts: {
   job: string; color?: string; colors?: Record<string, string>;
