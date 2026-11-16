@@ -93,7 +93,10 @@ export function modelTime(rel: string): number {
         if (e.name.startsWith(".")) continue;
         const p = path.join(dir, e.name);
         if (e.isDirectory()) walk(p);
-        else if (e.isFile() && !e.name.endsWith(".md")) max = Math.max(max, fs.statSync(p).mtimeMs);
+        else if (!e.name.endsWith(".md")) { // stat follows a symlinked file to its target
+          const s = fs.statSync(p, { throwIfNoEntry: false });
+          if (s?.isFile()) max = Math.max(max, s.mtimeMs);
+        }
       }
     };
     walk(abs(`models/${id}`));
