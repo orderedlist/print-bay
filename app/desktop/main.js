@@ -3,7 +3,8 @@
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { app, BrowserWindow, dialog, shell } from "electron";
+import { app, BrowserWindow, dialog, Menu, shell } from "electron";
+import { checkForUpdatesNow, startUpdater } from "./updater.js";
 
 // The environment as launched, before the server adds to it (PRINT_BAY_DATA above all):
 // a restart starts from this, so it reads the library location afresh.
@@ -53,7 +54,33 @@ async function createWindow() {
   await win.loadURL(url);
 }
 
+// Electron's default menu, plus Check for Updates… under the app name
+function setMenu() {
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    {
+      label: app.name,
+      submenu: [
+        { role: "about" },
+        { label: "Check for Updates…", click: () => checkForUpdatesNow() },
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
+    { role: "fileMenu" },
+    { role: "editMenu" },
+    { role: "viewMenu" },
+    { role: "windowMenu" },
+  ]));
+}
+
 app.whenReady().then(async () => {
+  setMenu();
   // packaged, the icon comes from the bundle (electron-builder's mac.icon); run from a checkout, set it here
   if (!app.isPackaged && process.platform === "darwin") app.dock?.setIcon(fileURLToPath(new URL("icon.png", import.meta.url)));
   const { start } = await loadServer();
@@ -77,6 +104,7 @@ app.whenReady().then(async () => {
     }
   }
   await createWindow();
+  startUpdater();
   app.on("activate", () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });
 

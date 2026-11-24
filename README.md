@@ -159,12 +159,42 @@ CLI bundled with esbuild, the built UI, `scripts/check`, `scripts/nurb` and
 The app runs its own binary as Node for `scripts/check`, and links Claude's
 tools from `~/Library/Caches/PrintBay/bin` because their real path has a space.
 
-Signing uses the "Developer ID Application" certificate in your keychain.
+Signing uses the "Developer ID Application: Steve Smith (BJ2LT5F6JX)"
+certificate in your keychain (`mac.identity` in `app/desktop/package.json`).
+Keep releases on that team: macOS only installs an update signed by the same
+team as the installed copy. An "Apple Development" certificate won't do; it
+can't be notarized and other Macs refuse it.
 Notarizing also needs Apple credentials in the environment, for example
 `APPLE_KEYCHAIN_PROFILE` (a profile made with `xcrun notarytool
 store-credentials`), or `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and
 `APPLE_TEAM_ID`. The build is Apple silicon only. People who install it
 still need OrcaSlicer, and Claude Code, OpenSCAD and Git for those features.
+
+### Releases and updates
+
+Pushing a version tag publishes a release:
+
+```
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+`.github/workflows/release.yml` sets the app's version from the tag, builds,
+signs and notarizes it, and publishes a GitHub Release on
+orderedlist/print-bay with the `.dmg` (for new installs), the `.zip` and
+`latest-mac.yml` (for updates). It needs these repository secrets:
+`MAC_CERTIFICATE_P12_BASE64` (the Developer ID Application certificate
+exported from Keychain Access as a `.p12`, then `base64 -i cert.p12`),
+`MAC_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and
+`APPLE_TEAM_ID` (`BJ2LT5F6JX`). To release from this Mac instead, bump `version` in
+`app/desktop/package.json`, then `GH_TOKEN=$(gh auth token) npm run release`
+in `app/`.
+
+The installed app (`app/desktop/updater.js`) checks that feed at launch and
+every four hours, downloads a newer version in the background, and offers to
+restart; put off, it installs when you quit. **Print Bay → Check for
+Updates…** checks now. Updates only work in the signed, packaged app, and
+macOS only installs them when they're signed by the same certificate.
 
 ### Setup and Settings
 

@@ -1,0 +1,42 @@
+# Push a tag like v0.2.0 and this builds Print Bay, signs and notarizes it, and publishes a
+# GitHub Release with the .dmg, the .zip and latest-mac.yml. Installed copies check that
+# release feed (app/desktop/updater.js) and update themselves. The tag sets the version.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  mac:
+    runs-on: macos-15 # Apple silicon, which is all the app builds for
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - run: npm ci
+
+      - name: Set the version from the tag
+        run: npm version "${GITHUB_REF_NAME#v}" -w desktop --no-git-tag-version --allow-same-version
+
+      - name: Build, sign, notarize and publish
+        run: npm run release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # the Developer ID Application certificate, exported as a .p12 and base64-encoded
+          CSC_LINK: ${{ secrets.MAC_CERTIFICATE_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
