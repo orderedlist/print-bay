@@ -3,7 +3,8 @@
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { app, BrowserWindow, dialog, shell } from "electron";
+import { app, BrowserWindow, dialog, Menu, shell } from "electron";
+import { createUpdater } from "./updater.js";
 
 // The environment as launched, before the server adds to it (PRINT_BAY_DATA above all):
 // a restart starts from this, so it reads the library location afresh.
@@ -30,6 +31,17 @@ async function loadServer() {
 }
 
 let url;
+// made once the app is ready; packaged only: run from a checkout there's nothing to update
+let updates = null;
+
+/** The menu's Check for Updates…: check, and show Settings, where the result appears. */
+function checkForUpdates() {
+  updates?.check();
+  const win = BrowserWindow.getAllWindows()[0];
+  if (!win) return;
+  win.show();
+  win.webContents.executeJavaScript("location.hash = '#/settings'");
+}
 
 async function createWindow() {
   const win = new BrowserWindow({
@@ -53,12 +65,40 @@ async function createWindow() {
   await win.loadURL(url);
 }
 
+// Electron's default menu, plus Check for Updates… under the app name
+function setMenu() {
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    {
+      label: app.name,
+      submenu: [
+        { role: "about" },
+        ...(updates ? [{ label: "Check for Updates…", click: checkForUpdates }] : []),
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
+    { role: "fileMenu" },
+    { role: "editMenu" },
+    { role: "viewMenu" },
+    { role: "windowMenu" },
+  ]));
+}
+
 app.whenReady().then(async () => {
+  if (app.isPackaged) updates = createUpdater();
+  setMenu();
   // packaged, the icon comes from the bundle (electron-builder's mac.icon); run from a checkout, set it here
   if (!app.isPackaged && process.platform === "darwin") app.dock?.setIcon(fileURLToPath(new URL("icon.png", import.meta.url)));
   const { start } = await loadServer();
   const serverOptions = {
     quiet: true,
+    updates: updates ?? undefined,
     restart,
     pickFolder: async () => {
       const options = { title: "Choose a library folder", properties: ["openDirectory", "createDirectory"] };
@@ -77,6 +117,7 @@ app.whenReady().then(async () => {
     }
   }
   await createWindow();
+  updates?.start();
   app.on("activate", () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });
 

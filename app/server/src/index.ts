@@ -13,7 +13,7 @@ import { checkModel } from "./modelchecks.js";
 import { toolpathsFor } from "./gcode.js";
 import * as moonraker from "./moonraker.js";
 import { getQueue, print, removeEntry, startNext } from "./printing.js";
-import { isSlicing, slice } from "./slice.js";
+import { isSlicing, slice, stopSlices } from "./slice.js";
 import * as agent from "./agent.js";
 import * as repos from "./repos.js";
 import * as settings from "./settings.js";
@@ -25,6 +25,23 @@ export interface StartOptions {
   /** The desktop app can restart itself (to open another library) and show a folder picker. */
   restart?: () => void;
   pickFolder?: () => Promise<string | null>;
+  /** The desktop app's updater (app/desktop/updater.js): Settings shows its state. */
+  updates?: Updates;
+}
+
+export interface UpdateStatus {
+  version: string; // the running version
+  state: "idle" | "checking" | "current" | "downloading" | "ready" | "error";
+  available: string | null; // the newer version found
+  percent: number | null; // of the download
+  error: string | null;
+  checkedAt: number | null;
+}
+export interface Updates {
+  status(): UpdateStatus;
+  onChange(fn: (s: UpdateStatus) => void): void;
+  check(): void;
+  install(): void;
 }
 
 export async function start(opts: StartOptions = {}) {
@@ -41,7 +58,7 @@ export async function start(opts: StartOptions = {}) {
     if (!closed) poll = setTimeout(pollStatus, 2000);
   };
   void pollStatus();
-  app.addHook("onClose", async () => { closed = true; if (poll) clearTimeout(poll); });
+  app.addHook("onClose", async () => { closed = true; if (poll) clearTimeout(poll); stopSlices(); });
 
   // Files change outside the app too (CLI slices, nurb exports, hand edits):
   // tell browsers to refresh models when they do, coalescing bursts.
@@ -240,6 +257,21 @@ export async function start(opts: StartOptions = {}) {
     return repos.setRemote(req.params.id, req.body?.url ?? "");
   });
 
+  // ---- app updates (desktop only): the state comes over /api/events as "update" ----
+  opts.updates?.onChange((s) => publish("update", s));
+  app.post("/api/update/check", async (req, reply) => {
+    if (!opts.updates) return reply.status(409).send({ error: "Only the desktop app updates itself" });
+    if (!local(req.ip)) throw localOnly("Check for updates");
+    opts.updates.check();
+    return opts.updates.status();
+  });
+  app.post("/api/update/install", async (req, reply) => {
+    if (!opts.updates) return reply.status(409).send({ error: "Only the desktop app updates itself" });
+    if (!local(req.ip)) throw localOnly("Restart to update");
+    setTimeout(() => opts.updates!.install(), 300); // answer first
+    return { ok: true };
+  });
+
   // ---- live events ----
   app.get("/api/events", (req, reply) => {
     reply.hijack();
@@ -248,6 +280,7 @@ export async function start(opts: StartOptions = {}) {
     const send = (e: { type: string; data: unknown }) => res.write(`event: ${e.type}\ndata: ${JSON.stringify(e.data)}\n\n`);
     send({ type: "status", data: status });
     send({ type: "queue", data: getQueue() });
+    send({ type: "update", data: opts.updates?.status() ?? null });
     bus.on("event", send);
     const ping = setInterval(() => res.write(": ping\n\n"), 25_000);
     req.raw.on("close", () => { bus.off("event", send); clearInterval(ping); });

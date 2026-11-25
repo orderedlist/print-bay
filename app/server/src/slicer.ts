@@ -12,6 +12,10 @@ import { NOZZLE_PROFILES, STOCK, type Nozzle } from "./nozzle.js";
 import * as parts3mf from "./parts3mf.js";
 
 type Log = (line: string) => void;
+
+// The 3MFs written here are scratch files OrcaSlicer reads straight away: store them uncompressed.
+// Deflating hundreds of MB of model XML in JavaScript took most of a minute for a plate of pots.
+const STORE = { level: 0 } as const;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Toml = Record<string, any>;
 
@@ -30,10 +34,16 @@ const rel = (f: string) => path.relative(DATA, f);
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const readToml = (file: string) => parse(fs.readFileSync(file, "utf8")) as Toml;
 
+/** What this process has started (OpenSCAD, OrcaSlicer, nurb), so stopping a slice stops them too. */
+const programs = new Set<ReturnType<typeof spawn>>();
+export function stopPrograms() { for (const p of programs) p.kill("SIGTERM"); }
+
 /** Run a program; rejects with the tail of its output. */
 function run(cmd: string, args: string[], what: string, cwd = DATA): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    programs.add(child);
+    child.on("exit", () => programs.delete(child));
     let out = "";
     const keep = (c: Buffer) => { out = (out + c.toString()).slice(-4000); };
     child.stdout.on("data", keep);
@@ -254,7 +264,7 @@ export function singleFilament(src: string, dest: string, only?: string, fill?: 
     if (name.endsWith(".model")) data = data.replace(/ paint_color="[^"]*"/g, "");
     out[name] = strToU8(data);
   }
-  fs.writeFileSync(dest, zipSync(out));
+  fs.writeFileSync(dest, zipSync(out, STORE));
   return [dest, plate];
 }
 
@@ -330,7 +340,7 @@ export function mergePlate(job: Toml, colors: string[], out: string, oneColor: b
   zout["Metadata/model_settings.config"] = strToU8('<?xml version="1.0" encoding="UTF-8"?>\n<config>\n  ' + configs.join("\n  ")
     + '\n  <plate>\n    <metadata key="plater_id" value="1"/>\n    <metadata key="plater_name" value=""/>\n'
     + '    <metadata key="locked" value="false"/>\n' + instances.join("\n") + "\n  </plate>\n</config>\n");
-  fs.writeFileSync(dest, zipSync(zout));
+  fs.writeFileSync(dest, zipSync(zout, STORE));
   return [dest, 1];
 }
 
@@ -399,7 +409,13 @@ export async function sliceJob(file: string, o: SliceOptions, log: Log): Promise
       model,
     ];
     log("Slicing with OrcaSlicer…");
-    await run(ORCA, args, "OrcaSlicer");
+    // a plate of big parts takes minutes: say it's still going
+    const started = Date.now();
+    const ticker = setInterval(() => {
+      const s = Math.round((Date.now() - started) / 1000);
+      log(`Still slicing… ${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`);
+    }, 15_000);
+    try { await run(ORCA, args, "OrcaSlicer"); } finally { clearInterval(ticker); }
     const gcodes = fs.readdirSync(out).filter((f) => f.endsWith(".gcode"))
       .map((f) => path.join(out, f)).sort((a, b) => fs.statSync(a).mtimeMs - fs.statSync(b).mtimeMs);
     if (!gcodes.length) throw fail("OrcaSlicer finished but wrote no G-code.");

@@ -41,6 +41,7 @@ function useNarrow() {
 
 export function App() {
   const live = useLive();
+  const updateReady = live.update?.state === "ready";
   const models = useModels(live.modelsVersion);
   const [repos, setRepos] = useRepos(live.modelsVersion);
   const changed = repos?.reduce((n, r) => n + r.changes.length, 0) ?? 0;
@@ -116,7 +117,7 @@ export function App() {
             <div className="stage-hint">
               {route.left === "changes" ? (
                 <><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><circle cx="6" cy="6" r="2.5" /><circle cx="6" cy="18" r="2.5" /><circle cx="18" cy="8" r="2.5" /><path d="M6 8.5v7M18 10.5c0 4-6 3-11 5.5" /></svg>
-                  <b>Commit and push your changes</b><span style={{ fontSize: 12 }}>Models and settings in the library, code in the app</span></>
+                  <b>Commit and push your changes</b><span style={{ fontSize: 12 }}>Models, jobs and settings in the library</span></>
               ) : route.left === "create" ? (
                 <><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" /></svg>
                   <b>Describe the part to Claude</b><span style={{ fontSize: 12 }}>It shows up here once it's drawn</span></>
@@ -161,8 +162,11 @@ export function App() {
               <div className="muted" style={{ fontSize: 12 }}>K2 Workspace · {n} {n === 1 ? "model" : "models"}</div>
             </div>
             {!setup && (
-              <button className="ibtn" style={{ marginLeft: "auto" }} aria-label="Settings" title="Settings" aria-pressed={route.left === "settings"}
+              <button className="ibtn" style={{ marginLeft: "auto", position: "relative" }} aria-pressed={route.left === "settings"}
+                aria-label={updateReady ? `Settings: Print Bay ${live.update?.available} is ready to install` : "Settings"}
+                title={updateReady ? `Print Bay ${live.update?.available} is ready: restart to update` : "Settings"}
                 onClick={() => go(route.left === "settings" ? "/printer" : "/settings")}>
+                {updateReady && <span className="dot" style={{ position: "absolute", top: 4, right: 4, background: "var(--ok)" }} />}
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
               </button>
             )}
@@ -181,7 +185,7 @@ export function App() {
         </div>
         <div className="panel-body">
           {showSettings ? (
-            settings ? <SettingsPanel settings={settings} setSettings={setSettings} setup={setup} toast={toast} /> : <div className="sec muted">Loading…</div>
+            settings ? <SettingsPanel settings={settings} setSettings={setSettings} setup={setup} update={live.update} toast={toast} /> : <div className="sec muted">Loading…</div>
           ) : !models ? (
             <div className="sec muted">Loading…</div>
           ) : route.left === "printer" ? (

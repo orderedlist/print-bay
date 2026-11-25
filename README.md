@@ -72,6 +72,14 @@ walls print slower and keep their sheen. `--material silk` writes
 `gcode/<job>-silk.gcode`, and the app picks Silk when the slot is set to
 Generic PLA-Silk or CR-Silk.
 
+Stone-filled PLA (marble, granite) uses `profiles/k2-stone.json`: the job's
+PLA with a 60 °C bed and 225 °C nozzle for the first layer (55 °C after) so it
+grips the textured plate, and flow capped at 12 mm³/s. Print it with a 0.6 mm
+nozzle. Creality has no filament id for it, so pick **Stone** in the app (or
+`--material stone`, which writes `gcode/<job>-stone.gcode`). A part whose first
+layer is a thin ring on its own, like the succulent pots' bases, also wants a
+brim in its job (`brim_type = "outer_only"`, `brim_width = "5"`).
+
 For a 0.6 mm nozzle, `run.py --nozzle 0.6` slices with
 `profiles/k2-machine-0.6.json` (Orca's "Creality K2 0.6 nozzle", with the same
 purge-line edit) and lays `profiles/k2-nozzle-0.6.json` over the job's process:
@@ -151,12 +159,47 @@ CLI bundled with esbuild, the built UI, `scripts/check`, `scripts/nurb` and
 The app runs its own binary as Node for `scripts/check`, and links Claude's
 tools from `~/Library/Caches/PrintBay/bin` because their real path has a space.
 
-Signing uses the "Developer ID Application" certificate in your keychain.
+Signing uses the "Developer ID Application: Steve Smith (BJ2LT5F6JX)"
+certificate in your keychain (`mac.identity` in `app/desktop/package.json`).
+Keep releases on that team: macOS only installs an update signed by the same
+team as the installed copy. An "Apple Development" certificate won't do; it
+can't be notarized and other Macs refuse it.
 Notarizing also needs Apple credentials in the environment, for example
 `APPLE_KEYCHAIN_PROFILE` (a profile made with `xcrun notarytool
 store-credentials`), or `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and
 `APPLE_TEAM_ID`. The build is Apple silicon only. People who install it
 still need OrcaSlicer, and Claude Code, OpenSCAD and Git for those features.
+
+### Releases and updates
+
+Pushing a version tag publishes a release:
+
+```
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+`.github/workflows/release.yml` sets the app's version from the tag, builds,
+signs and notarizes it, and publishes a GitHub Release on
+orderedlist/print-bay with the `.dmg` (for new installs), the `.zip` and
+`latest-mac.yml` (for updates). It needs these repository secrets:
+`MAC_CERTIFICATE_P12_BASE64` (the Developer ID Application certificate
+exported from Keychain Access as a `.p12`, then `base64 -i cert.p12`),
+`MAC_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and
+`APPLE_TEAM_ID` (`BJ2LT5F6JX`). To release from this Mac instead, bump `version` in
+`app/desktop/package.json`, run `npm run dist:notarize` in `app/`, then from
+`app/desktop/release`: `gh release create v<version> latest-mac.yml
+Print-Bay-*.dmg Print-Bay-*.zip Print-Bay-*.blockmap`. Each release must hold
+all of those, and only one release per tag: the app reads `latest-mac.yml`
+from the newest one.
+
+The installed app (`app/desktop/updater.js`) checks that feed at launch and
+every four hours and downloads a newer version in the background, without
+dialogs. **Settings** shows the version and what the updater is doing, with
+**Check for updates** and, once one has downloaded, **Restart to update** (the
+gear gets a green dot); left alone, it installs when you quit. **Print Bay →
+Check for Updates…** checks and opens Settings. Updates only work in the signed, packaged app, and
+macOS only installs them when they're signed by the same certificate.
 
 ### Setup and Settings
 
@@ -200,22 +243,21 @@ chats run inside the library.
 
 ### Changes (git)
 
-The library and the app's code are each a git repo, and the **Changes** tab
-commits and pushes them. A new library becomes a repo on first run, ignoring
+The library is a git repo, and the **Changes** tab commits, pulls and
+pushes it. The app's own code isn't there: it updates from GitHub Releases
+(see Releases and updates), and **Settings** shows which version is running. A new library becomes a repo on first run, ignoring
 `gcode/` and `.cache/`. Commit takes everything that changed (`git add -A`),
 with a suggested message like "Update tote-rack". Push uses your own git
 sign-in (SSH key or credential helper) and never prompts, so push once from a
 terminal if it can't sign in. Without a remote, the tab asks for one, and only
-the computer running Print Bay can set it. In a checkout that is its own
-library, the library and the app are one repo.
+the computer running Print Bay can set it.
 
 **Pull** rebases your commits onto the remote's and keeps uncommitted edits.
 It won't start if you've edited a file the pull changes (commit first), and if
 your commits and the remote's change the same lines it backs out with nothing
 changed, for you to merge in a terminal. The tab fetches while it's open, at
 most once a minute, so it can show what's waiting. Commit and Pull wait while
-Claude is editing. A pull that changes `app/` takes effect after a restart;
-changes to `scripts/` apply at once.
+Claude is editing.
 
 ### Claude
 

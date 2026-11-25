@@ -1,19 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { Rates, Repo, SettingsView, ToolName, ToolStatus } from "../types";
+import type { Rates, Repo, SettingsView, ToolName, ToolStatus, UpdateStatus } from "../types";
 
 interface Props {
   settings: SettingsView;
   setSettings: (s: SettingsView) => void;
   /** first run: a welcome, and a button to finish */
   setup: boolean;
+  /** the desktop app's updater; null in a browser or run from a checkout */
+  update: UpdateStatus | null;
   toast: (msg: string, error?: boolean) => void;
 }
 
 const FROM: Record<string, string> = { env: "set by the environment", settings: "set here", found: "found", default: "default", missing: "" };
 
 /** Setup on first run, Settings after: the printer, the library, the tools, and cost rates. */
-export function SettingsPanel({ settings, setSettings, setup, toast }: Props) {
+export function SettingsPanel({ settings, setSettings, setup, update, toast }: Props) {
   // one save at a time, so a slower earlier answer can't overwrite a later one
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const save = (body: object, done?: string): Promise<boolean> => {
@@ -36,6 +38,7 @@ export function SettingsPanel({ settings, setSettings, setup, toast }: Props) {
           </p>
         </div>
       )}
+      {update && !setup && <UpdateSection update={update} toast={toast} />}
       <PrinterSection settings={settings} save={save} toast={toast} />
       <LibrarySection settings={settings} setup={setup} toast={toast} setSettings={setSettings} save={save} />
       <div className="sec">
@@ -315,6 +318,46 @@ function RatesSection({ rates, save }: { rates: Rates; save: (b: object, done?: 
       {dirty && (
         <button className="cta cta-md go" style={{ marginTop: 10 }} disabled={!valid}
           onClick={() => save({ rates: Object.fromEntries(RATE_FIELDS.map((f) => [f.key, Number(draft[f.key])])) }, "Costs saved.")}>Save costs</button>
+      )}
+    </div>
+  );
+}
+
+function ago(ms: number): string {
+  const m = Math.round((Date.now() - ms) / 60_000);
+  return m < 1 ? "just now" : m < 60 ? `${m}m ago` : m < 48 * 60 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
+}
+
+/** The app's version and its updates from GitHub Releases: what's happening, and the button for it. */
+function UpdateSection({ update: u, toast }: { update: UpdateStatus; toast: Props["toast"] }) {
+  const [busy, setBusy] = useState(false);
+  const post = async (what: "check" | "install") => {
+    setBusy(true);
+    try { await api(`/api/update/${what}`, { method: "POST" }); } catch (e) { toast((e as Error).message, true); }
+    setBusy(false);
+  };
+  const line = u.state === "checking" ? "Checking for updates…"
+    : u.state === "downloading" ? `Downloading ${u.available}…${u.percent ? ` ${u.percent}%` : ""}`
+      : u.state === "ready" ? `${u.available} is ready. Restart to update, or it installs when you quit.`
+        : u.state === "error" ? `Couldn't check for updates: ${u.error}`
+          : u.state === "current" ? `Up to date${u.checkedAt ? ` · checked ${ago(u.checkedAt)}` : ""}`
+            : "Updates from GitHub Releases";
+  return (
+    <div className="sec">
+      <div className="sech">
+        Print Bay<span className="count">{u.version}</span>
+      </div>
+      <div className={u.state === "error" ? "" : "muted"} style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.45, color: u.state === "error" ? "var(--warn)" : undefined }}>
+        {line}
+      </div>
+      {u.state === "ready" ? (
+        <button className="cta cta-md go" style={{ marginTop: 12 }} disabled={busy} onClick={() => post("install")}>
+          {busy ? "Restarting…" : `Restart to update to ${u.available}`}
+        </button>
+      ) : (
+        <button className="cta cta-md" style={{ marginTop: 12 }} disabled={busy || u.state === "checking" || u.state === "downloading"} onClick={() => post("check")}>
+          Check for updates
+        </button>
       )}
     </div>
   );

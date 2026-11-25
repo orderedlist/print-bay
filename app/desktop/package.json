@@ -9,18 +9,19 @@
   "scripts": {
     "start": "electron .",
     "bundle": "node bundle.mjs",
-    "dist": "node bundle.mjs && electron-builder --mac",
-    "dist:notarize": "node bundle.mjs && electron-builder --mac -c.mac.notarize=true"
+    "dist": "node bundle.mjs && electron-builder --mac --publish never",
+    "dist:notarize": "node bundle.mjs && electron-builder --mac --publish never -c.mac.notarize=true"
   },
   "build": {
     "appId": "com.boxoutdesigns.printbay",
     "productName": "Print Bay",
-    "copyright": "Box Out Designs LLC",
+    "copyright": "Steve Smith",
     "directories": {
       "output": "release"
     },
     "files": [
       "main.js",
+      "updater.js",
       "package.json"
     ],
     "extraResources": [
@@ -47,15 +48,28 @@
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,
       "notarize": false,
-      "icon": "icon.png"
+      "icon": "icon.png",
+      "artifactName": "Print-Bay-${version}-${arch}.${ext}",
+      "identity": "Steve Smith (BJ2LT5F6JX)"
     },
     "dmg": {
       "title": "Print Bay ${version}"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "orderedlist",
+        "repo": "print-bay",
+        "releaseType": "release"
+      }
+    ]
   },
   "devDependencies": {
     "electron": "44.5.1",
     "electron-builder": "^26.18.0",
     "esbuild": "^0.28.2"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
   }
 }
