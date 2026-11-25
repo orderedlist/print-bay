@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, colorName, duration, jobFromFilename, title, type Live } from "../api";
 import { Thumb } from "../components/Thumb";
-import { IDLE_STATES, type Model } from "../types";
+import { IDLE_STATES, type Model, type Printer } from "../types";
 
 const LABELS: Record<string, [string, string]> = {
   printing: ["Printing", "var(--ok)"],
@@ -16,26 +16,58 @@ const colorsOf = (e: { hex: string; hexes?: string[] }) => (e.hexes ?? [e.hex]).
 
 export const stateLabel = (state: string) => LABELS[state] ?? [state, "var(--muted)"];
 
-/** The camera's caption: what's printing and how far along. */
-export function printerCaption(live: Live): string {
-  const s = live.status;
-  if (!s) return "Connecting to the K2…";
-  if (!s.online) return "Can't reach the K2";
+/** The camera's caption: which printer (when there are several), what's printing and how far along. */
+export function printerCaption(printers: Printer[] | null, printer: Printer | null): string {
+  if (!printers) return "Connecting to the printer…";
+  if (!printer) return "No printer set up";
+  const s = printer.status;
+  const who = printers.length > 1 ? `${printer.name} · ` : "";
+  if (!s.online) return `${who}Can't reach ${printers.length > 1 ? "it" : printer.name}`;
   const [label] = stateLabel(s.state);
-  if (!s.filename || IDLE_STATES.has(s.state)) return `K2 · ${label}`;
+  if (!s.filename || IDLE_STATES.has(s.state)) return `${printer.name} · ${label}`;
   const layer = s.layer.current != null ? ` · layer ${s.layer.current} of ${s.layer.total ?? "?"}` : "";
-  return `${label} ${title(jobFromFilename(s.filename))}${layer}`;
+  return `${who}${label} ${title(jobFromFilename(s.filename))}${layer}`;
+}
+
+/** What a printer is up to, in a few words: for lists of printers. */
+export function printerSummary(p: Printer, queued: number): string {
+  const s = p.status;
+  if (!s.online) return "can't reach it";
+  if (s.state === "printing" || s.state === "paused")
+    return `${s.state === "paused" ? "paused · " : ""}${Math.round(s.progress * 100)}% · ${duration(s.etaSeconds)} left`;
+  return queued ? `${queued} queued` : stateLabel(s.state)[0].toLowerCase();
+}
+
+/** Every printer, to switch between: shown when there's more than one. */
+export function PrinterSwitch({ printers, current, pick, live }: { printers: Printer[]; current: Printer | null; pick: (id: string) => void; live: Live }) {
+  return (
+    <div role="radiogroup" aria-label="Printer" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      {printers.map((p) => (
+        <button key={p.id} className="row" role="radio" aria-checked={p.id === current?.id} onClick={() => pick(p.id)}>
+          <span className="dot" style={{ background: stateLabel(p.status.state)[1] }} />
+          <span className="row-text">
+            <span className="row-title">{p.name}</span>
+            <span className="row-sub">{printerSummary(p, live.queue.entries.filter((e) => e.printer === p.id).length)}</span>
+          </span>
+        </button>
+      ))}
+    </div>
+  );
 }
 
 interface Props {
   live: Live;
+  printer: Printer | null;
+  pickPrinter: (id: string) => void;
   models: Model[];
   toast: (msg: string, error?: boolean) => void;
   openModel: (id: string) => void;
 }
 
-export function PrinterPanel({ live, models, toast, openModel }: Props) {
-  const { status, queue } = live;
+export function PrinterPanel({ live, printer, pickPrinter, models, toast, openModel }: Props) {
+  const status = printer?.status ?? null;
+  const id = printer?.id ?? "";
+  const queue = { active: live.queue.active[id] ?? null, entries: live.queue.entries.filter((e) => e.printer === id) };
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [busy, setBusy] = useState(false);
   const [nozzle, setNozzle] = useState<string | null>(null); // mm; set here, since the printer doesn't report a swap
@@ -58,10 +90,19 @@ export function PrinterPanel({ live, models, toast, openModel }: Props) {
   const idle = IDLE_STATES.has(state);
   const next = queue.entries[0];
 
+  if (live.printers && !printer) return <div className="sec muted">No printer set up yet. Add one in Settings.</div>;
+  const several = (live.printers?.length ?? 0) > 1;
+
   return (
     <>
+      {several && (
+        <div className="sec">
+          <div className="sech">Printers<span className="count">{live.printers!.length}</span></div>
+          <div className="sec-body"><PrinterSwitch printers={live.printers!} current={printer} pick={pickPrinter} live={live} /></div>
+        </div>
+      )}
       <div className="sec">
-        <div className="sech"><span className="dot" style={{ background: color }} /> {label}
+        <div className="sech">{several && <span>{printer?.name} ·</span>}<span className="dot" style={{ background: color }} /> {label}
           {running && <span className="count">{duration(status?.etaSeconds ?? null)} left</span>}</div>
         {status?.filename ? (
           <>
@@ -81,13 +122,13 @@ export function PrinterPanel({ live, models, toast, openModel }: Props) {
             {active && <div className="faint" style={{ fontSize: 12, marginTop: 8 }}>{colorsOf(active)} from {active.slot}</div>}
           </>
         ) : (
-          <div className="muted" style={{ marginTop: 10 }}>{status?.online === false ? `Can't reach the printer. ${status.message}` : "Nothing printing."}</div>
+          <div className="muted" style={{ marginTop: 10 }}>{status?.online === false ? `Can't reach ${printer?.name ?? "the printer"}. ${status.message}` : "Nothing printing."}</div>
         )}
         {running && (
           <div className="grid2" style={{ marginTop: 12 }}>
             {state === "paused"
-              ? <button className="cta cta-md" disabled={busy} onClick={() => act(() => api("/api/printer/resume", { method: "POST" }), "Resuming.")}>Resume</button>
-              : <button className="cta cta-md" disabled={busy} onClick={() => act(() => api("/api/printer/pause", { method: "POST" }), "Pausing.")}>Pause</button>}
+              ? <button className="cta cta-md" disabled={busy} onClick={() => act(() => api(`/api/printers/${id}/resume`, { method: "POST" }), "Resuming.")}>Resume</button>
+              : <button className="cta cta-md" disabled={busy} onClick={() => act(() => api(`/api/printers/${id}/pause`, { method: "POST" }), "Pausing.")}>Pause</button>}
             <button className="cta cta-md danger" disabled={busy} onClick={() => setConfirmCancel(true)}>Cancel</button>
           </div>
         )}
@@ -156,7 +197,7 @@ export function PrinterPanel({ live, models, toast, openModel }: Props) {
             })}
             <button className="cta cta-md go" style={{ marginTop: 8 }} disabled={!idle || busy || !next}
               title={idle ? "" : "Waiting for the current print to finish"}
-              onClick={() => act(() => api("/api/queue/next", { method: "POST" }), `Starting ${title(next.job)}.`)}>
+              onClick={() => act(() => api(`/api/printers/${id}/queue/next`, { method: "POST" }), `Starting ${title(next.job)}.`)}>
               {idle ? "Bed is clear, start next" : "Starts after this print"}
             </button>
           </div>
@@ -172,7 +213,7 @@ export function PrinterPanel({ live, models, toast, openModel }: Props) {
               <button className="cta cta-md" autoFocus onClick={() => setConfirmCancel(false)}>Keep printing</button>
               <button className="cta cta-md danger" disabled={busy} onClick={async () => {
                 setConfirmCancel(false);
-                await act(() => api("/api/printer/cancel", { method: "POST" }), "Print cancelled. Clear the bed before the next one.");
+                await act(() => api(`/api/printers/${id}/cancel`, { method: "POST" }), "Print cancelled. Clear the bed before the next one.");
               }}>Cancel print</button>
             </div>
           </div>

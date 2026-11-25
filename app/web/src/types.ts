@@ -21,6 +21,10 @@ export interface PrinterStatus {
   message: string;
 }
 
+/** A printer set up in Settings, with its live status. */
+export interface Printer { id: string; name: string; host: string; hostname: string | null; camera: string; status: PrinterStatus }
+export interface PrinterConfig { id: string; name: string; host: string; hostname?: string; mac?: string }
+
 export interface Cost { filament: number; power: number; total: number }
 export interface Stats { time: string; seconds: number; grams: number; cost: Cost; slicedAt: number }
 
@@ -46,9 +50,9 @@ export interface Model { id: string; file: string | null; kind: string | null; m
 export interface ScadParam { name: string; default: string; value: string; comment: string }
 
 export interface QueueEntry {
-  id: string; job: string; color: string; hex: string; hexes?: string[]; slot: string; material?: Material; perPlate?: number; filename: string; copy: number; of: number;
+  id: string; printer: string; job: string; color: string; hex: string; hexes?: string[]; slot: string; material?: Material; perPlate?: number; filename: string; copy: number; of: number;
 }
-export interface QueueState { active: QueueEntry | null; entries: QueueEntry[] }
+export interface QueueState { active: Record<string, QueueEntry>; entries: QueueEntry[] }
 
 export interface SliceEvent { job: string; state: "running" | "done" | "failed"; line: string }
 
@@ -107,7 +111,7 @@ export interface Rates { filament_per_kg: number; printer_watts: number; power_p
 export interface Caps { slice: boolean; openscad: boolean; claude: boolean; git: boolean; nurb: boolean }
 export interface SettingsView {
   needsSetup: boolean;
-  printer: { host: string | null; source: SettingSource };
+  printers: { list: PrinterConfig[]; source: SettingSource };
   tools: ToolStatus[];
   rates: Rates;
   library: { path: string; source: "env" | "chosen" | "checkout" | "default"; fresh: boolean; next: string | null; default: string };

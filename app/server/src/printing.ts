@@ -5,10 +5,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { CACHE } from "./config.js";
+import { CACHE, PRINTERS } from "./config.js";
 import { publish } from "./events.js";
 import { gcodePath, getJob, hexFor, isMaterial, isStale, type Material } from "./jobs.js";
 import * as moonraker from "./moonraker.js";
+import { printer, refresh } from "./printers.js";
 import { slice } from "./slice.js";
 
 const MAX_COLOR_DISTANCE = 120;
@@ -16,6 +17,7 @@ const SAME_COLOR = 20; // closer than this, two spools are the same colour and a
 
 export interface QueueEntry {
   id: string;
+  printer: string; // the printer's id: the file is uploaded to it
   job: string;
   color: string;
   hex: string;
@@ -28,12 +30,23 @@ export interface QueueEntry {
   of: number;
 }
 
-interface QueueState { active: QueueEntry | null; entries: QueueEntry[] }
+/** `active`: what each printer was last started on, by printer id. */
+interface QueueState { active: Record<string, QueueEntry>; entries: QueueEntry[] }
 
 const QUEUE_FILE = path.join(CACHE, "queue.json");
-let state: QueueState = fs.existsSync(QUEUE_FILE)
-  ? JSON.parse(fs.readFileSync(QUEUE_FILE, "utf8"))
-  : { active: null, entries: [] };
+let state: QueueState = load();
+
+/** The queue, kept from before there could be several printers: it all belonged to the first. */
+function load(): QueueState {
+  if (!fs.existsSync(QUEUE_FILE)) return { active: {}, entries: [] };
+  const saved = JSON.parse(fs.readFileSync(QUEUE_FILE, "utf8")) as { active: unknown; entries: QueueEntry[] };
+  const first = PRINTERS[0]?.id ?? "k2";
+  const old = (e: QueueEntry): QueueEntry => (e.printer ? e : { ...e, printer: first });
+  const active = !saved.active ? {}
+    : "filename" in (saved.active as object) ? { [first]: old(saved.active as QueueEntry) }
+    : saved.active as Record<string, QueueEntry>;
+  return { active, entries: saved.entries.map(old) };
+}
 
 function save() {
   fs.writeFileSync(QUEUE_FILE, JSON.stringify(state, null, 2));
@@ -85,8 +98,8 @@ function forSlots(gcode: string, slots: moonraker.Slot[]): string {
 }
 
 async function startEntry(entry: QueueEntry) {
-  await moonraker.start(entry.filename);
-  state.active = entry;
+  await moonraker.start(printer(entry.printer).host, entry.filename);
+  state.active[entry.printer] = entry;
 }
 
 /**
@@ -95,6 +108,7 @@ async function startEntry(entry: QueueEntry) {
  * `material` slices for that filament; left out, it's what the printer has a picked spool set as (wood, silk; stone has no Creality id, so it's picked), else PLA.
  */
 export async function print(opts: {
+  printer?: string; // its id; may be left out when there's only one
   job: string; color?: string; colors?: Record<string, string>;
   slot?: string; slots?: Record<string, string>; // the spools picked (T1A, EXT): exact where two hold the same colour
   copies: number; perPlate?: number; material?: string; startNow: boolean;
@@ -102,8 +116,9 @@ export async function print(opts: {
   const job = getJob(opts.job);
   const copies = Math.max(1, Math.min(20, Math.floor(opts.copies))); // plates, one after another
   const perPlate = Math.max(1, Math.min(400, Math.floor(opts.perPlate ?? 1)));
-  const status = await moonraker.getStatus();
-  if (!status.online) throw fail("Can't reach the printer", 503);
+  const target = printer(opts.printer);
+  const status = await refresh(target.id);
+  if (!status.online) throw fail(`Can't reach ${target.name}`, 503);
   const colors = job.parts.length ? job.parts.map((p) => opts.colors?.[p.name] ?? p.color) : [opts.color ?? job.color ?? ""];
   if (!colors.every(Boolean)) throw fail("Pick a colour");
   const keys = job.parts.length ? job.parts.map((p) => p.name) : [""];
@@ -111,7 +126,7 @@ export async function print(opts: {
     const picked = job.parts.length ? opts.slots?.[keys[i]] : opts.slot;
     if (!picked) return findSlot(c, status.slots);
     const s = status.slots.find((x) => x.slot === picked);
-    if (!s) throw fail(`The printer reports nothing in ${picked}`, 409);
+    if (!s) throw fail(`${target.name} reports nothing in ${picked}`, 409);
     return s;
   });
   const slot = slots[0];
@@ -123,14 +138,14 @@ export async function print(opts: {
   if (material !== "pla" && perPlate > 1) throw fail(`Several to a plate isn't set up for ${material} yet`);
   if (job.plate && perPlate > 1) throw fail("A plate is laid out already; print more of it as copies");
   if (opts.startNow && !moonraker.IDLE_STATES.has(status.state))
-    throw fail(`The printer is ${status.state}; add it to the queue instead`, 409);
+    throw fail(`${target.name} is ${status.state}; add it to the queue instead`, 409);
 
   if (isStale(job, perPlate, material, oneColor)) await slice(job.name, perPlate, material, oneColor);
   const file = forSlots(gcodePath(job.name, perPlate, material, undefined, oneColor), feeds);
-  await moonraker.upload(file);
+  await moonraker.upload(target.host, file);
 
   const entries = Array.from({ length: copies }, (_, i): QueueEntry => ({
-    id: randomUUID(), job: job.name, color: oneColor ? colors[0] : colors.join(" + "), hex: slot.color,
+    id: randomUUID(), printer: target.id, job: job.name, color: oneColor ? colors[0] : colors.join(" + "), hex: slot.color,
     ...(feeds.length > 1 ? { hexes: feeds.map((s) => s.color) } : {}), slot: feeds.map((s) => s.slot).join(" + "),
     ...(perPlate > 1 ? { perPlate } : {}), ...(material === "pla" ? {} : { material }),
     filename: path.basename(file), copy: i + 1, of: copies,
@@ -145,16 +160,24 @@ export async function print(opts: {
   return { started, queued: entries.length, slot: feeds.map((s) => s.slot).join(" + ") };
 }
 
-/** Start the next queued copy once someone confirms the bed is clear. */
-export async function startNext() {
-  const next = state.entries[0];
-  if (!next) throw fail("The queue is empty", 409);
-  const status = await moonraker.getStatus();
-  if (!moonraker.IDLE_STATES.has(status.state)) throw fail(`The printer is ${status.state}`, 409);
+/** Start a printer's next queued copy once someone confirms its bed is clear. */
+export async function startNext(printerId: string) {
+  const p = printer(printerId);
+  const next = state.entries.find((e) => e.printer === p.id);
+  if (!next) throw fail(`Nothing queued for ${p.name}`, 409);
+  const status = await refresh(p.id);
+  if (!moonraker.IDLE_STATES.has(status.state)) throw fail(`${p.name} is ${status.state}`, 409);
   await startEntry(next);
-  state.entries.shift();
+  state.entries = state.entries.filter((e) => e !== next);
   save();
   return next;
+}
+
+/** A printer was removed in Settings: its queue goes with it (the files were uploaded to it). */
+export function forgetPrinter(id: string) {
+  delete state.active[id];
+  state.entries = state.entries.filter((e) => e.printer !== id);
+  save();
 }
 
 export function removeEntry(id: string) {

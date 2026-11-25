@@ -50,13 +50,23 @@ export const WEB_DIST = path.join(APP_ROOT, "app/web/dist");
 export const PORT = Number(process.env.PORT ?? 8765);
 export const HOST = process.env.BIND ?? "0.0.0.0"; // LAN, so a phone can use it
 
-// ---- settings for this computer: the printer and where the tools are ----
+// ---- settings for this computer: its printers and where the tools are ----
 // Kept in the library as settings.json, which git never commits (see repos.ts): another
-// computer sharing the library has its own printer address and tool paths.
+// computer sharing the library has its own printers and tool paths.
 
 export const SETTINGS_FILE = path.join(DATA, "settings.json");
 export type ToolName = "orca" | "openscad" | "claude" | "git" | "nurb";
-export interface Settings { printer?: string; tools?: Partial<Record<ToolName, string>>; setupDone?: boolean }
+/**
+ * A printer this computer prints to. `mac` (its Wi-Fi card) and `hostname` (what it calls itself, K2-360F)
+ * don't change when the router hands it a new address: they find the printer again when it moves.
+ */
+export interface PrinterConfig { id: string; name: string; host: string; hostname?: string; mac?: string }
+export interface Settings {
+  printers?: PrinterConfig[];
+  printer?: string; // before there could be several: the one printer's address
+  tools?: Partial<Record<ToolName, string>>;
+  setupDone?: boolean;
+}
 
 export function readSettings(): Settings {
   try { return JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8")) as Settings; } catch { return {}; }
@@ -110,17 +120,21 @@ export function resolveTool(name: ToolName, settings = readSettings()): { path: 
   return { path: fallback, source: "missing" };
 }
 
-export function resolvePrinter(settings = readSettings()): { host: string | null; source: Source } {
-  if (ENV0.K2_HOST) return { host: ENV0.K2_HOST, source: "env" };
-  if (settings.printer) return { host: settings.printer, source: "settings" };
-  // no guess for anyone else: Setup scans the network for the printer
-  return { host: LEGACY_PRINTER, source: LEGACY_PRINTER ? "default" : "missing" };
+/** The printers and why: K2_HOST in the environment (one printer), settings.json, or the address a checkout always used. */
+export function resolvePrinters(settings = readSettings()): { printers: PrinterConfig[]; source: Source } {
+  const one = (host: string): PrinterConfig[] => [{ id: "k2", name: "K2", host }];
+  if (ENV0.K2_HOST) return { printers: one(ENV0.K2_HOST), source: "env" };
+  if (settings.printers) return { printers: settings.printers, source: "settings" };
+  if (settings.printer) return { printers: one(settings.printer), source: "settings" };
+  // no guess for anyone else: Setup scans the network for printers
+  return { printers: LEGACY_PRINTER ? one(LEGACY_PRINTER) : [], source: LEGACY_PRINTER ? "default" : "missing" };
 }
 
+/** The K2's camera, a WebRTC endpoint beside Moonraker. */
+export const cameraUrl = (host: string) => `http://${host.split(":")[0]}:8000/call/webrtc_local`;
+
 // Live bindings: modules that import these see new values after applySettings().
-export let K2_HOST: string | null = null;
-export let MOONRAKER: string | null = null;
-export let CAMERA_URL: string | null = null;
+export let PRINTERS: PrinterConfig[] = [];
 export let ORCA = "";
 export let OPENSCAD = "";
 export let CLAUDE = "";
@@ -130,9 +144,7 @@ export let NURB_PYTHON = "";
 /** Read settings.json (and the environment) into the values above, and into the environment children get. */
 export function applySettings(): void {
   const s = readSettings();
-  K2_HOST = resolvePrinter(s).host;
-  MOONRAKER = K2_HOST ? `http://${K2_HOST}` : null;
-  CAMERA_URL = K2_HOST ? `http://${K2_HOST.split(":")[0]}:8000/call/webrtc_local` : null;
+  PRINTERS = resolvePrinters(s).printers;
   ORCA = resolveTool("orca", s).path;
   OPENSCAD = resolveTool("openscad", s).path;
   CLAUDE = resolveTool("claude", s).path;
@@ -140,7 +152,8 @@ export function applySettings(): void {
   NURB_PYTHON = resolveTool("nurb", s).path;
   // nurb_part.py, and the terminal scripts if run from the app, read these
   Object.assign(process.env, { ORCA, OPENSCAD, NURB_PYTHON });
-  if (K2_HOST) process.env.K2_HOST = K2_HOST; else delete process.env.K2_HOST;
+  // the terminal scripts drive one printer: the first
+  if (PRINTERS[0]) process.env.K2_HOST = PRINTERS[0].host; else delete process.env.K2_HOST;
 }
 
 // ---- the library's starting contents ----

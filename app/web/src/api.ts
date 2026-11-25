@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AgentSession, Model, PrinterStatus, QueueState, Repo, SettingsView, SliceEvent, UpdateStatus } from "./types";
+import type { AgentSession, Model, Printer, QueueState, Repo, SettingsView, SliceEvent, UpdateStatus } from "./types";
 
 export async function api<T = unknown>(path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
   const { json, ...rest } = init ?? {};
@@ -15,7 +15,7 @@ export async function api<T = unknown>(path: string, init?: RequestInit & { json
 }
 
 export interface Live {
-  status: PrinterStatus | null;
+  printers: Printer[] | null; // null until the server first says
   queue: QueueState;
   slice: Record<string, SliceEvent[]>; // log lines per job
   modelsVersion: number; // bumps when models/slices change
@@ -23,12 +23,12 @@ export interface Live {
   update: UpdateStatus | null; // the desktop app's updater; null in a browser
 }
 
-/** One EventSource for the whole app: printer status, queue, slicing progress, app updates. */
+/** One EventSource for the whole app: printers and their status, queue, slicing progress, app updates. */
 export function useLive(): Live {
-  const [live, setLive] = useState<Live>({ status: null, queue: { active: null, entries: [] }, slice: {}, modelsVersion: 0, agents: {}, update: null });
+  const [live, setLive] = useState<Live>({ printers: null, queue: { active: {}, entries: [] }, slice: {}, modelsVersion: 0, agents: {}, update: null });
   useEffect(() => {
     const es = new EventSource("/api/events");
-    es.addEventListener("status", (e) => setLive((l) => ({ ...l, status: JSON.parse((e as MessageEvent).data) })));
+    es.addEventListener("printers", (e) => setLive((l) => ({ ...l, printers: JSON.parse((e as MessageEvent).data) })));
     es.addEventListener("queue", (e) => setLive((l) => ({ ...l, queue: JSON.parse((e as MessageEvent).data) })));
     es.addEventListener("agent", (e) => {
       const s: AgentSession = JSON.parse((e as MessageEvent).data);
@@ -124,6 +124,13 @@ export function colorName(hex: string): string {
 /** The job behind a printer filename: "stacking-box-T1A.gcode" -> "stacking-box". */
 export function jobFromFilename(filename: string): string {
   return filename.replace(/\.gcode$/, "").replace(/-T\d[A-D]$/, "");
+}
+
+/** The printer in view (Printer tab, Print box): the one picked last, else the first. Remembered on this browser. */
+export function useCurrentPrinter(printers: Printer[] | null): [Printer | null, (id: string) => void] {
+  const [id, setId] = useState<string | null>(() => localStorage.getItem("printbay.printer"));
+  const pick = (next: string) => { setId(next); localStorage.setItem("printbay.printer", next); };
+  return [printers?.find((p) => p.id === id) ?? printers?.[0] ?? null, pick];
 }
 
 /** A Claude session: fetched once, then kept current by live `agent` events. */

@@ -7,9 +7,9 @@ import { ModelViewer, SEVERITY_COLORS, type ViewAvailability, type ViewMode } fr
 import { Params } from "../components/Params";
 import { ICONS, Toolbar, type Action } from "../components/Toolbar";
 import type { Theme } from "../theme";
-import { IDLE_STATES, type AgentSession, type Caps, type CheckReport, MATERIAL_NAMES, type Material, type Model, type ScadParam, slotName } from "../types";
+import { IDLE_STATES, type AgentSession, type Caps, type CheckReport, MATERIAL_NAMES, type Material, type Model, type Printer, type ScadParam, slotName } from "../types";
 import { plateFit } from "../plate";
-import { stateLabel } from "./PrinterPanel";
+import { PrinterSwitch, printerSummary, stateLabel } from "./PrinterPanel";
 
 // Common revisions, offered as starting points in the Claude tab.
 const EDIT_STARTERS = [
@@ -63,6 +63,8 @@ function Section({ icon, label, open, toggle, children, extra, action }: {
 interface Props {
   model: Model;
   live: Live;
+  printer: Printer | null; // the one to print on
+  pickPrinter: (id: string) => void;
   caps: Caps; // what's set up on this computer: no Claude Code, no Claude tab
   tab: InspectorTab;
   setTab: (tab: InspectorTab) => void;
@@ -81,7 +83,7 @@ interface Props {
 }
 
 /** A selected model: on the stage, with the bottom toolbar and the inspector beside it. */
-export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTheme, shift, inspectorSlot, close, goPrinter, newModel, toast, jobName, setJobName }: Props) {
+export function ModelWorkspace({ model, live, printer, pickPrinter, caps, tab, setTab, theme, toggleTheme, shift, inspectorSlot, close, goPrinter, newModel, toast, jobName, setJobName }: Props) {
   // a multi-part model (labelled jobs, say a plant and its pot) prints one part at a time
   const job = model.jobs.find((j) => j.name === jobName) ?? model.jobs[0];
   const partGroups = pickerGroups(model.jobs);
@@ -128,7 +130,9 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
   const drawn = !!model.file; // a model Claude is still creating has only its folder
   const parametric = model.kind === "scad" || model.kind === "py"; // OpenSCAD, or a nurb part
   const canEdit = parametric || !drawn;
-  const status = live.status;
+  const status = printer?.status ?? null;
+  const several = (live.printers?.length ?? 0) > 1;
+  const queued = live.queue.entries.filter((e) => e.printer === printer?.id).length;
   const [mode, setMode] = useState<ViewMode>("model");
   const [available, setAvailable] = useState<ViewAvailability>({ model: true, paths: false, stress: false, layout: false });
   const [size, setSize] = useState<THREE.Vector3 | null>(null);
@@ -217,6 +221,7 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
   const [sending, setSending] = useState(false);
   const [materialPick, setMaterialPick] = useState<Material | null>(null); // null: as the printer has the spool set
   useEffect(() => { setPicked({}); setCopies(job?.copies ?? 1); setMaterialPick(null); }, [job?.name]); // a different part: its own colour and count
+  useEffect(() => { setPicked({}); setMaterialPick(null); }, [printer?.id]); // another printer has its own spools
   useEffect(() => { // default to the spool nearest the job's color, once the printer reports them
     const missing = colorways.filter((c) => !picked[c.key]);
     if (missing.length && slots.length)
@@ -256,17 +261,17 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
   }, [perPlate, oneColor, !!exact, slicing]); // eslint-disable-line react-hooks/exhaustive-deps
   const count = perPlate * copies;
   const submit = async (startNow: boolean) => {
-    if (!job || !chosen) return;
+    if (!job || !chosen || !printer) return;
     setConfirm(false);
     setSending(true);
     try {
       const r = await api<{ started: boolean; queued: number }>("/api/print", {
         method: "POST", json: multi
-          ? { job: job.name, colors: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.color])),
+          ? { printer: printer.id, job: job.name, colors: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.color])),
             slots: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.slot])), copies, perPlate, material, startNow }
-          : { job: job.name, color: chosen.color, slot: chosen.slot, copies, perPlate, material, startNow },
+          : { printer: printer.id, job: job.name, color: chosen.color, slot: chosen.slot, copies, perPlate, material, startNow },
       });
-      const what = `${title(model.id)}${job.label ? ` (${job.label})` : ""} in ${colorsText}`;
+      const what = `${title(model.id)}${job.label ? ` (${job.label})` : ""} in ${colorsText}${several ? ` on ${printer.name}` : ""}`;
       toast(r.started
         ? `Started ${what}.${r.queued ? ` ${r.queued} more ${r.queued === 1 ? "copy" : "copies"} queued.` : ""}`
         : `Queued ${r.queued} × ${what}.`);
@@ -316,10 +321,9 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
             <button className="row status-chip" onClick={goPrinter} title="Open the printer">
               <span className="ico">{ICONS.print}</span>
               <span className="row-text">
-                <span style={{ fontSize: 12, fontWeight: 500 }}>K2 · {stateText}</span>
+                <span style={{ fontSize: 12, fontWeight: 500 }}>{printer?.name ?? "No printer"} · {stateText}</span>
                 <span className="row-sub" style={{ color: "var(--muted)" }}>
-                  {running ? `${Math.round((status?.progress ?? 0) * 100)}% · ${duration(status?.etaSeconds ?? null)} left`
-                    : live.queue.entries.length ? `${live.queue.entries.length} queued` : status?.online === false ? "can't reach it" : "ready"}
+                  {!printer ? "add one in Settings" : running || !status?.online || queued ? printerSummary(printer, queued) : "ready"}
                 </span>
               </span>
               <span className="dot" style={{ background: stateColor }} />
@@ -417,6 +421,12 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
                     {confirmDelete ? `Delete ${job.label ?? "plate"}?` : "Delete plate"}
                   </button>
                 </div>
+              </Section>
+            )}
+
+            {several && (
+              <Section label="Printer">
+                <PrinterSwitch printers={live.printers!} current={printer} pick={pickPrinter} live={live} />
               </Section>
             )}
 
@@ -609,7 +619,7 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
       {confirm && (
         <div className="scrim" onClick={() => setConfirm(false)}>
           <div className="panel dialog" role="dialog" aria-modal="true" aria-labelledby="bed-clear" onClick={(e) => e.stopPropagation()}>
-            <h2 id="bed-clear">Is the bed clear?</h2>
+            <h2 id="bed-clear">Is the bed clear{several && printer ? ` on ${printer.name}` : ""}?</h2>
             <div className="muted">
               {count > 1 ? `${count} × ` : ""}{title(model.id)} in {colorsText}{perPlate > 1 ? `, ${perPlate} to a plate` : ""}{copies > 1 ? `, ${copies} plates` : ""}.
               The first copy starts as soon as it's sent{stale ? " (it slices first)" : ""}.

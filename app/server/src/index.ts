@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
-import { CAMERA_URL, DATA, HOST, K2_HOST, normalizeHost, PORT, WEB_DIST } from "./config.js";
+import { DATA, HOST, normalizeHost, PORT, WEB_DIST } from "./config.js";
 import { bus, publish } from "./events.js";
 import { getJob, getModel, isMaterial, listJobs, listModels, rates, scadParams, setScadParams, writePlate } from "./jobs.js";
 import { meshFor } from "./mesh.js";
@@ -12,7 +12,8 @@ import { isNozzle, setNozzle, getNozzle } from "./nozzle.js";
 import { checkModel } from "./modelchecks.js";
 import { toolpathsFor } from "./gcode.js";
 import * as moonraker from "./moonraker.js";
-import { getQueue, print, removeEntry, startNext } from "./printing.js";
+import { forgetPrinter, getQueue, print, removeEntry, startNext } from "./printing.js";
+import * as printers from "./printers.js";
 import { isSlicing, slice, stopSlices } from "./slice.js";
 import * as agent from "./agent.js";
 import * as repos from "./repos.js";
@@ -47,18 +48,9 @@ export interface Updates {
 export async function start(opts: StartOptions = {}) {
   const app = Fastify({ logger: !opts.quiet && { level: "warn" } });
   await repos.ensureLibraryRepo().catch((e) => console.warn(`Couldn't make the library a git repo: ${e.message}`));
-  // Listen right away; the printer may be off or its name slow to resolve. Poll every 2 s
-  // after the last answer, so a slow printer never has requests piling up.
-  let status: moonraker.PrinterStatus = { ...moonraker.OFFLINE, message: "Connecting to the printer…" };
-  let closed = false;
-  let poll: NodeJS.Timeout | null = null;
-  const pollStatus = async () => {
-    status = await moonraker.getStatus();
-    publish("status", status);
-    if (!closed) poll = setTimeout(pollStatus, 2000);
-  };
-  void pollStatus();
-  app.addHook("onClose", async () => { closed = true; if (poll) clearTimeout(poll); stopSlices(); });
+  // Listen right away; a printer may be off or its name slow to resolve.
+  printers.sync();
+  app.addHook("onClose", async () => { printers.stop(); stopSlices(); });
 
   // Files change outside the app too (CLI slices, nurb exports, hand edits):
   // tell browsers to refresh models when they do, coalescing bursts.
@@ -77,8 +69,9 @@ export async function start(opts: StartOptions = {}) {
     reply.status(err.statusCode ?? 500).send({ error: err.message });
   });
 
-  // ---- printer ----
-  app.get("/api/printer", async () => ({ host: K2_HOST, camera: CAMERA_URL, nozzle: getNozzle() }));
+  // ---- printers ----
+  app.get("/api/printers", async () => printers.view());
+  app.get("/api/printer", async () => ({ nozzle: getNozzle() })); // one nozzle setting, for slicing
   app.put<{ Body: { nozzle?: string } }>("/api/printer/nozzle", async (req, reply) => {
     const nozzle = req.body?.nozzle;
     if (!isNozzle(nozzle)) return reply.status(400).send({ error: `Unknown nozzle "${nozzle}"` });
@@ -86,10 +79,9 @@ export async function start(opts: StartOptions = {}) {
     publish("models", null); // every job's slice and stats are for the nozzle now set
     return { nozzle };
   });
-  app.get("/api/status", async () => status);
   for (const action of ["pause", "resume", "cancel"] as const) {
-    app.post(`/api/printer/${action}`, async () => {
-      await moonraker[action]();
+    app.post<{ Params: { id: string } }>(`/api/printers/:id/${action}`, async (req) => {
+      await moonraker[action](printers.printer(req.params.id).host);
       return { ok: true };
     });
   }
@@ -175,7 +167,7 @@ export async function start(opts: StartOptions = {}) {
   app.post<{ Body: Parameters<typeof print>[0] }>("/api/print", async (req) =>
     print(req.body));
   app.get("/api/queue", async () => getQueue());
-  app.post("/api/queue/next", async () => startNext());
+  app.post<{ Params: { id: string } }>("/api/printers/:id/queue/next", async (req) => startNext(req.params.id));
   app.delete<{ Params: { id: string } }>("/api/queue/:id", async (req) => {
     removeEntry(req.params.id);
     return getQueue();
@@ -210,12 +202,34 @@ export async function start(opts: StartOptions = {}) {
   app.get("/api/settings", async () => ({ ...settings.view(), desktop }));
   app.put<{ Body: settings.SettingsUpdate }>("/api/settings", async (req) => {
     if (!local(req.ip)) throw localOnly("Change settings");
-    const v = { ...settings.update(req.body ?? {}), desktop };
-    status = await moonraker.getStatus(); // a new printer address shows at once
-    publish("status", status);
-    return v;
+    return { ...settings.update(req.body ?? {}), desktop };
   });
-  app.post("/api/settings/scan-printers", async () => moonraker.scanForPrinters());
+  // a changed printer shows at once: its polling restarts at the new address
+  app.post<{ Body: settings.PrinterInput }>("/api/settings/printers", async (req) => {
+    if (!local(req.ip)) throw localOnly("Add a printer");
+    const p = settings.addPrinter(req.body ?? {});
+    printers.sync();
+    return p;
+  });
+  app.put<{ Params: { id: string }; Body: settings.PrinterInput }>("/api/settings/printers/:id", async (req) => {
+    if (!local(req.ip)) throw localOnly("Change a printer");
+    const p = settings.updatePrinter(req.params.id, req.body ?? {});
+    printers.sync();
+    return p;
+  });
+  app.delete<{ Params: { id: string } }>("/api/settings/printers/:id", async (req) => {
+    if (!local(req.ip)) throw localOnly("Remove a printer");
+    settings.removePrinter(req.params.id);
+    forgetPrinter(req.params.id);
+    printers.sync();
+    return { ok: true };
+  });
+  app.post("/api/settings/scan-printers", async () => {
+    const found = await moonraker.scanForPrinters();
+    const moved = settings.applyScan(found);
+    if (moved.length) printers.sync(); // poll them at their new addresses
+    return { found, moved };
+  });
   app.post<{ Body: { host: string } }>("/api/settings/test-printer", async (req) => {
     const host = normalizeHost(req.body?.host ?? "");
     return { host, ...(await moonraker.probe(host)) };
@@ -278,7 +292,7 @@ export async function start(opts: StartOptions = {}) {
     const res = reply.raw;
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
     const send = (e: { type: string; data: unknown }) => res.write(`event: ${e.type}\ndata: ${JSON.stringify(e.data)}\n\n`);
-    send({ type: "status", data: status });
+    send({ type: "printers", data: printers.view() });
     send({ type: "queue", data: getQueue() });
     send({ type: "update", data: opts.updates?.status() ?? null });
     bus.on("event", send);
