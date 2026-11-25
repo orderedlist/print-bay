@@ -9,7 +9,7 @@ import { ICONS, Toolbar, type Action } from "../components/Toolbar";
 import type { Theme } from "../theme";
 import { IDLE_STATES, type AgentSession, type Caps, type CheckReport, MATERIAL_NAMES, type Material, type Model, type ScadParam, slotName } from "../types";
 import { plateFit } from "../plate";
-import { stateLabel } from "./PrinterPanel";
+import { printerOf, stateLabel } from "./PrinterPanel";
 
 // Common revisions, offered as starting points in the Claude tab.
 const EDIT_STARTERS = [
@@ -316,7 +316,7 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
             <button className="row status-chip" onClick={goPrinter} title="Open the printer">
               <span className="ico">{ICONS.print}</span>
               <span className="row-text">
-                <span style={{ fontSize: 12, fontWeight: 500 }}>{status?.printer ?? "K2"} · {stateText}</span>
+                <span style={{ fontSize: 12, fontWeight: 500 }}>{printerOf(status)} · {stateText}</span>
                 <span className="row-sub" style={{ color: "var(--muted)" }}>
                   {running ? `${Math.round((status?.progress ?? 0) * 100)}% · ${duration(status?.etaSeconds ?? null)} left`
                     : live.queue.entries.length ? `${live.queue.entries.length} queued` : status?.online === false ? "can't reach it" : "ready"}

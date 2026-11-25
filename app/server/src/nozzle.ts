@@ -2,7 +2,7 @@
 // so it's set in the app and remembered here; slicing and printing use it (see NOZZLE_PROFILES, which slicer.ts swaps in).
 import fs from "node:fs";
 import path from "node:path";
-import { CACHE, K2_HOST, K2_NAME } from "./config.js";
+import { CACHE, isThisPrinter, PRINTER_ID } from "./config.js";
 
 export const NOZZLES = ["0.4", "0.6"] as const;
 export type Nozzle = (typeof NOZZLES)[number];
@@ -14,21 +14,24 @@ export const NOZZLE_PROFILES: Record<Nozzle, string[]> = {
 };
 export const isNozzle = (n: unknown): n is Nozzle => NOZZLES.includes(n as Nozzle);
 
-// { printers: { <name or address>: nozzle } }. A file from before there could be several
-// printers holds just { nozzle }, which stands for every printer until one is set.
+// { printers: { <printer id>: nozzle } } (PRINTER_ID). A file from before there could be several
+// printers holds just { nozzle }: it becomes the setting of the printer in use.
 const FILE = path.join(CACHE, "printer.json");
 interface Saved { nozzle?: string; printers?: Record<string, string> }
-let saved: Saved = (() => {
-  try { return JSON.parse(fs.readFileSync(FILE, "utf8")) as Saved; } catch { return {}; }
+let saved: Record<string, string> = (() => {
+  try {
+    const file = JSON.parse(fs.readFileSync(FILE, "utf8")) as Saved;
+    return file.printers ?? (file.nozzle && PRINTER_ID ? { [PRINTER_ID]: file.nozzle } : {});
+  } catch { return {}; }
 })();
 
 export function getNozzle(): Nozzle {
-  // by name, or by address if it was set before the printer first answered
-  const n = saved.printers ? saved.printers[K2_NAME ?? ""] ?? saved.printers[K2_HOST ?? ""] : saved.nozzle;
+  const n = Object.entries(saved).find(([id]) => isThisPrinter(id))?.[1];
   return isNozzle(n) ? n : STOCK;
 }
 
 export function setNozzle(n: Nozzle) {
-  saved = { printers: { ...saved.printers, [K2_NAME ?? K2_HOST ?? ""]: n } };
-  fs.writeFileSync(FILE, JSON.stringify(saved, null, 2));
+  if (!PRINTER_ID) throw Object.assign(new Error("Set up a printer first, in Settings."), { statusCode: 409 });
+  saved = { ...Object.fromEntries(Object.entries(saved).filter(([id]) => !isThisPrinter(id))), [PRINTER_ID]: n };
+  fs.writeFileSync(FILE, JSON.stringify({ printers: saved }, null, 2));
 }

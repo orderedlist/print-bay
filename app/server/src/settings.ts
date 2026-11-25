@@ -63,7 +63,7 @@ export function view(): SettingsView {
   return {
     // a checkout that is its own library was set up before settings existed
     needsSetup: !s.setupDone && path.resolve(DATA) !== path.resolve(APP_ROOT),
-    printer: { ...resolvePrinter(s), saved: printers.list() },
+    printer: { ...resolvePrinter(s), saved: printers.list(s) },
     tools,
     rates: rates(),
     library: { path: DATA, source: LIBRARY_SOURCE, fresh: libraryFresh(), next: nextLibrary, default: DEFAULT_LIBRARY },
@@ -82,8 +82,8 @@ export interface SettingsUpdate {
   setupDone?: boolean;
 }
 
-export function update(u: SettingsUpdate): SettingsView {
-  if (u.printer) printers.add(u.printer);
+export async function update(u: SettingsUpdate): Promise<SettingsView> {
+  if (u.printer) await printers.add(u.printer);
   if (u.forgetPrinter) printers.forget(u.forgetPrinter);
   const s = readSettings();
   if (u.tools) {

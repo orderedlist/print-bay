@@ -109,6 +109,9 @@ export interface Caps { slice: boolean; openscad: boolean; claude: boolean; git:
 /** A printer saved on this computer; `name` is what it calls itself, once it has answered. */
 export interface SavedPrinter { host: string; name?: string; active: boolean }
 
+/** The printer in use and the others saved; pushed whenever either changes. */
+export interface PrinterView { host: string | null; nozzle: string; printers: SavedPrinter[] }
+
 export interface SettingsView {
   needsSetup: boolean;
   printer: { host: string | null; source: SettingSource; saved: SavedPrinter[] };

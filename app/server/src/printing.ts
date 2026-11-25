@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { CACHE, K2_HOST, K2_NAME } from "./config.js";
+import { CACHE, isThisPrinter, PRINTER_ID } from "./config.js";
 import { publish } from "./events.js";
 import { gcodePath, getJob, hexFor, isMaterial, isStale, type Material } from "./jobs.js";
 import * as moonraker from "./moonraker.js";
@@ -31,17 +31,22 @@ export interface QueueEntry {
 
 interface QueueState { active: QueueEntry | null; entries: QueueEntry[] }
 
+// Each printer has its own queue: a copy is uploaded to one printer and can only start there.
+// Every printer's copies are kept in one list, tagged with the printer; `running` holds the
+// copy each printer last started. A file from before there could be several holds `active`.
 const QUEUE_FILE = path.join(CACHE, "queue.json");
-let state: QueueState = fs.existsSync(QUEUE_FILE)
-  ? JSON.parse(fs.readFileSync(QUEUE_FILE, "utf8"))
-  : { active: null, entries: [] };
+const state: { running: QueueEntry[]; entries: QueueEntry[] } = (() => {
+  if (!fs.existsSync(QUEUE_FILE)) return { running: [], entries: [] };
+  const file = JSON.parse(fs.readFileSync(QUEUE_FILE, "utf8"));
+  return { running: file.running ?? (file.active ? [file.active] : []), entries: file.entries ?? [] };
+})();
 
-/** Each printer has its own queue: a copy is uploaded to one printer and can only start there. */
-const forThisPrinter = (e: QueueEntry) => !e.printer || e.printer === K2_NAME || e.printer === K2_HOST;
+/** Queued before there could be several printers: the one in use. */
+const forThisPrinter = (e: QueueEntry) => !e.printer || isThisPrinter(e.printer);
 
 /** The queue of the printer in use. */
 export const getQueue = (): QueueState => ({
-  active: state.active && forThisPrinter(state.active) ? state.active : null,
+  active: state.running.find(forThisPrinter) ?? null,
   entries: state.entries.filter(forThisPrinter),
 });
 
@@ -94,7 +99,7 @@ function forSlots(gcode: string, slots: moonraker.Slot[]): string {
 
 async function startEntry(entry: QueueEntry) {
   await moonraker.start(entry.filename);
-  state.active = entry;
+  state.running = [...state.running.filter((e) => !forThisPrinter(e)), entry];
 }
 
 /**
@@ -141,7 +146,7 @@ export async function print(opts: {
     id: randomUUID(), job: job.name, color: oneColor ? colors[0] : colors.join(" + "), hex: slot.color,
     ...(feeds.length > 1 ? { hexes: feeds.map((s) => s.color) } : {}), slot: feeds.map((s) => s.slot).join(" + "),
     ...(perPlate > 1 ? { perPlate } : {}), ...(material === "pla" ? {} : { material }),
-    filename: path.basename(file), copy: i + 1, of: copies, printer: K2_NAME ?? K2_HOST ?? undefined,
+    filename: path.basename(file), copy: i + 1, of: copies, printer: PRINTER_ID ?? undefined,
   }));
   let started = false;
   if (opts.startNow) {

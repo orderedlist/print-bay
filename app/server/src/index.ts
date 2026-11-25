@@ -56,16 +56,17 @@ export async function start(opts: StartOptions = {}) {
   const pollStatus = async () => {
     status = await moonraker.getStatus();
     publish("status", status);
-    printers.onStatus(status.online, () => void printerChanged()); // follows the printer to a new address
+    printers.onStatus(status.online, printerChanged); // follows the printer to a new address
     if (!closed) poll = setTimeout(pollStatus, 2000);
   };
-  /** Another printer in use, or this one at a new address: show its status, queue and slices at once. */
-  const printerChanged = async () => {
+  const printerView = () => ({ host: K2_HOST, camera: CAMERA_URL, nozzle: getNozzle(), printers: printers.list() });
+  /** Another printer in use, or this one at a new address: show it, its queue and its slices at once. */
+  const printerChanged = () => {
     printers.reset();
+    publish("printer", printerView());
     publish("queue", getQueue());
     publish("models", null); // each printer has its own nozzle, so its own slices
-    status = await moonraker.getStatus();
-    publish("status", status);
+    void moonraker.getStatus().then((s) => { status = s; publish("status", s); });
   };
   void pollStatus();
   app.addHook("onClose", async () => { closed = true; if (poll) clearTimeout(poll); stopSlices(); });
@@ -88,18 +89,18 @@ export async function start(opts: StartOptions = {}) {
   });
 
   // ---- printer ----
-  const printerView = () => ({ host: K2_HOST, camera: CAMERA_URL, nozzle: getNozzle(), printers: printers.list() });
   app.get("/api/printer", async () => printerView());
   // switching between saved printers works from anywhere; adding one is in Settings, on this computer
   app.put<{ Body: { host?: string } }>("/api/printer/active", async (req) => {
     printers.use(req.body?.host ?? "");
-    await printerChanged();
+    printerChanged();
     return printerView();
   });
   app.put<{ Body: { nozzle?: string } }>("/api/printer/nozzle", async (req, reply) => {
     const nozzle = req.body?.nozzle;
     if (!isNozzle(nozzle)) return reply.status(400).send({ error: `Unknown nozzle "${nozzle}"` });
     setNozzle(nozzle);
+    publish("printer", printerView());
     publish("models", null); // every job's slice and stats are for the nozzle now set
     return { nozzle };
   });
@@ -227,8 +228,8 @@ export async function start(opts: StartOptions = {}) {
   app.get("/api/settings", async () => ({ ...settings.view(), desktop }));
   app.put<{ Body: settings.SettingsUpdate }>("/api/settings", async (req) => {
     if (!local(req.ip)) throw localOnly("Change settings");
-    const v = { ...settings.update(req.body ?? {}), desktop };
-    if (req.body?.printer || req.body?.forgetPrinter) await printerChanged(); // a new printer shows at once
+    const v = { ...(await settings.update(req.body ?? {})), desktop };
+    if (req.body?.printer || req.body?.forgetPrinter) printerChanged(); // a new printer shows at once
     return v;
   });
   app.post("/api/settings/scan-printers", async () => moonraker.scanForPrinters());
@@ -296,6 +297,7 @@ export async function start(opts: StartOptions = {}) {
     const send = (e: { type: string; data: unknown }) => res.write(`event: ${e.type}\ndata: ${JSON.stringify(e.data)}\n\n`);
     send({ type: "status", data: status });
     send({ type: "queue", data: getQueue() });
+    send({ type: "printer", data: printerView() });
     send({ type: "update", data: opts.updates?.status() ?? null });
     bus.on("event", send);
     const ping = setInterval(() => res.write(": ping\n\n"), 25_000);

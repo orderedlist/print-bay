@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AgentSession, Model, PrinterStatus, QueueState, Repo, SavedPrinter, SettingsView, SliceEvent, UpdateStatus } from "./types";
+import type { AgentSession, Model, PrinterStatus, PrinterView, QueueState, Repo, SavedPrinter, SettingsView, SliceEvent, UpdateStatus } from "./types";
 
 export async function api<T = unknown>(path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
   const { json, ...rest } = init ?? {};
@@ -16,6 +16,7 @@ export async function api<T = unknown>(path: string, init?: RequestInit & { json
 
 export interface Live {
   status: PrinterStatus | null;
+  printer: PrinterView | null; // the printer in use, its nozzle, and the others saved
   queue: QueueState;
   slice: Record<string, SliceEvent[]>; // log lines per job
   modelsVersion: number; // bumps when models/slices change
@@ -25,10 +26,11 @@ export interface Live {
 
 /** One EventSource for the whole app: printer status, queue, slicing progress, app updates. */
 export function useLive(): Live {
-  const [live, setLive] = useState<Live>({ status: null, queue: { active: null, entries: [] }, slice: {}, modelsVersion: 0, agents: {}, update: null });
+  const [live, setLive] = useState<Live>({ status: null, printer: null, queue: { active: null, entries: [] }, slice: {}, modelsVersion: 0, agents: {}, update: null });
   useEffect(() => {
     const es = new EventSource("/api/events");
     es.addEventListener("status", (e) => setLive((l) => ({ ...l, status: JSON.parse((e as MessageEvent).data) })));
+    es.addEventListener("printer", (e) => setLive((l) => ({ ...l, printer: JSON.parse((e as MessageEvent).data) })));
     es.addEventListener("queue", (e) => setLive((l) => ({ ...l, queue: JSON.parse((e as MessageEvent).data) })));
     es.addEventListener("agent", (e) => {
       const s: AgentSession = JSON.parse((e as MessageEvent).data);

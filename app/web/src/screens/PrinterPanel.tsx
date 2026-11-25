@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api, colorName, duration, jobFromFilename, printerName, shortHost, title, type Live } from "../api";
 import { Thumb } from "../components/Thumb";
-import { IDLE_STATES, type Model, type SavedPrinter } from "../types";
+import { SegRow } from "../components/SegRow";
+import { IDLE_STATES, type Model, type PrinterStatus } from "../types";
 
 const LABELS: Record<string, [string, string]> = {
   printing: ["Printing", "var(--ok)"],
@@ -14,16 +15,18 @@ const LABELS: Record<string, [string, string]> = {
 };
 const colorsOf = (e: { hex: string; hexes?: string[] }) => (e.hexes ?? [e.hex]).map(colorName).join(" + ");
 
+/** The printer a status is for (null only before one is set up). */
+export const printerOf = (s: PrinterStatus | null) => s?.printer ?? "K2";
+
 export const stateLabel = (state: string) => LABELS[state] ?? [state, "var(--muted)"];
 
 /** The camera's caption: what's printing and how far along. */
 export function printerCaption(live: Live): string {
   const s = live.status;
-  const name = s?.printer ?? "the K2";
   if (!s) return "Connecting to the K2…";
-  if (!s.online) return `Can't reach ${name}`;
+  if (!s.online) return `Can't reach ${printerOf(s)}`;
   const [label] = stateLabel(s.state);
-  if (!s.filename || IDLE_STATES.has(s.state)) return `${s.printer ?? "K2"} · ${label}`;
+  if (!s.filename || IDLE_STATES.has(s.state)) return `${printerOf(s)} · ${label}`;
   const layer = s.layer.current != null ? ` · layer ${s.layer.current} of ${s.layer.total ?? "?"}` : "";
   return `${label} ${title(jobFromFilename(s.filename))}${layer}`;
 }
@@ -37,14 +40,10 @@ interface Props {
 
 export function PrinterPanel({ live, models, toast, openModel }: Props) {
   const { status, queue } = live;
+  const nozzle = live.printer?.nozzle ?? null; // mm; set here, since the printer doesn't report a swap
+  const printers = live.printer?.printers ?? [];
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [nozzle, setNozzle] = useState<string | null>(null); // mm; set here, since the printer doesn't report a swap
-  const [printers, setPrinters] = useState<SavedPrinter[]>([]);
-  // again when the printer in use changes (here, on another screen, or it moved to a new address)
-  useEffect(() => {
-    api<{ nozzle: string; printers: SavedPrinter[] }>("/api/printer").then((p) => { setNozzle(p.nozzle); setPrinters(p.printers); }).catch(() => {});
-  }, [status?.printer]);
 
   const act = async (fn: () => Promise<unknown>, done?: string) => {
     setBusy(true);
@@ -67,19 +66,10 @@ export function PrinterPanel({ live, models, toast, openModel }: Props) {
     <>
       {printers.length > 1 && (
         <div className="sec">
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ flexGrow: 1 }}>Printer</span>
-            <div className="seg seg-sm" role="radiogroup" aria-label="Printer" style={{ flex: "none" }}>
-              {printers.map((p) => (
-                <button key={p.host} role="radio" aria-checked={p.active} disabled={busy} style={{ padding: "0 10px" }} title={shortHost(p.host)}
-                  onClick={() => !p.active && act(async () => {
-                    const r = await api<{ nozzle: string; printers: SavedPrinter[] }>("/api/printer/active", { method: "PUT", json: { host: p.host } });
-                    setNozzle(r.nozzle);
-                    setPrinters(r.printers);
-                  }, `Using ${printerName(p)}.`)}>{printerName(p)}</button>
-              ))}
-            </div>
-          </div>
+          <SegRow label="Printer" disabled={busy} value={printers.find((p) => p.active)?.host ?? null}
+            options={printers.map((p) => ({ value: p.host, label: printerName(p), title: shortHost(p.host) }))}
+            onPick={(host) => act(() => api("/api/printer/active", { method: "PUT", json: { host } }),
+              `Using ${printerName(printers.find((p) => p.host === host)!)}.`)} />
         </div>
       )}
       <div className="sec">
@@ -124,15 +114,9 @@ export function PrinterPanel({ live, models, toast, openModel }: Props) {
             </div>
           ))}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
-          <span style={{ flexGrow: 1 }}>Nozzle size</span>
-          <div className="seg seg-sm" role="radiogroup" aria-label="Nozzle size" style={{ flex: "none" }}>
-            {["0.4", "0.6"].map((n) => (
-              <button key={n} role="radio" aria-checked={nozzle === n} disabled={busy || nozzle === null} style={{ padding: "0 10px" }}
-                onClick={() => nozzle !== n && act(async () => { await api("/api/printer/nozzle", { method: "PUT", json: { nozzle: n } }); setNozzle(n); },
-                  `Slicing for the ${n} mm nozzle from now on.`)}>{n} mm</button>
-            ))}
-          </div>
+        <div style={{ marginTop: 12 }}>
+          <SegRow label="Nozzle size" disabled={busy} value={nozzle} options={["0.4", "0.6"].map((n) => ({ value: n, label: `${n} mm` }))}
+            onPick={(n) => act(() => api("/api/printer/nozzle", { method: "PUT", json: { nozzle: n } }), `Slicing for the ${n} mm nozzle from now on.`)} />
         </div>
         <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>Set this when you swap the nozzle: prints are sliced for it.</div>
       </div>

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { K2_HOST, K2_NAME, MOONRAKER } from "./config.js";
+import { MOONRAKER, MOONRAKER_PORT, PRINTER_LABEL } from "./config.js";
 import type { Material } from "./jobs.js";
 
 /** Creality filament ids (Orca's filament_id; the CFS reports them as material_type) that aren't plain PLA. */
@@ -78,7 +78,7 @@ export const OFFLINE: PrinterStatus = {
 };
 
 export async function getStatus(): Promise<PrinterStatus> {
-  const printer = K2_NAME ?? K2_HOST?.replace(/:7125$/, "") ?? null;
+  const printer = PRINTER_LABEL;
   let s: any;
   try {
     const q = "print_stats&extruder&heater_bed&display_status&virtual_sdcard&box&filament_rack";
@@ -146,7 +146,6 @@ export interface FoundPrinter {
   k2: boolean; // a K2: its name says so, or it has a CFS
 }
 
-const MOONRAKER_PORT = 7125;
 const MAX_HOSTS = 1024;
 
 /** The IPv4 addresses on this Mac's local networks (a network bigger than MAX_HOSTS: the block around this Mac). */

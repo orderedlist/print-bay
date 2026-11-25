@@ -84,11 +84,13 @@ export function savedPrinters(s: Settings): SavedPrinter[] {
 /** A checkout that is its own library predates settings: it keeps the printer it always used. */
 const LEGACY_PRINTER = DATA === path.resolve(APP_ROOT) ? "192.168.4.42:7125" : null;
 
+export const MOONRAKER_PORT = 7125;
+
 /** "192.168.4.42" or "k2-360f.local:7125" (Moonraker's port is 7125 unless given). */
 export function normalizeHost(input: string): string {
   const h = input.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
   if (!/^[A-Za-z0-9.-]+(:\d{1,5})?$/.test(h)) throw Object.assign(new Error("Use the printer's IP address or host name, like 192.168.1.50"), { statusCode: 400 });
-  return h.includes(":") ? h : `${h}:7125`;
+  return h.includes(":") ? h : `${h}:${MOONRAKER_PORT}`;
 }
 
 const HOME = os.homedir();
@@ -134,6 +136,10 @@ export function resolvePrinter(settings = readSettings()): { host: string | null
 // Live bindings: modules that import these see new values after applySettings().
 export let K2_HOST: string | null = null;
 export let K2_NAME: string | null = null; // what the printer in use calls itself, once it has said
+/** The printer in use, as its queue and nozzle are kept: by name, or by address until it has one. */
+export let PRINTER_ID: string | null = null;
+/** The printer in use, for people: its name, or its address without Moonraker's port. */
+export let PRINTER_LABEL: string | null = null;
 export let MOONRAKER: string | null = null;
 export let CAMERA_URL: string | null = null;
 export let ORCA = "";
@@ -142,11 +148,16 @@ export let CLAUDE = "";
 export let GIT = "";
 export let NURB_PYTHON = "";
 
+/** Whether something kept for a printer (a queued copy, a nozzle) is for the one in use: by name, or by the address it had before it was named. */
+export const isThisPrinter = (id: string | undefined) => !!id && (id === K2_NAME || id === K2_HOST);
+
 /** Read settings.json (and the environment) into the values above, and into the environment children get. */
 export function applySettings(): void {
   const s = readSettings();
   K2_HOST = resolvePrinter(s).host;
   K2_NAME = savedPrinters(s).find((p) => p.host === K2_HOST)?.name ?? null;
+  PRINTER_ID = K2_NAME ?? K2_HOST;
+  PRINTER_LABEL = K2_NAME ?? K2_HOST?.replace(`:${MOONRAKER_PORT}`, "") ?? null;
   MOONRAKER = K2_HOST ? `http://${K2_HOST}` : null;
   CAMERA_URL = K2_HOST ? `http://${K2_HOST.split(":")[0]}:8000/call/webrtc_local` : null;
   ORCA = resolveTool("orca", s).path;
