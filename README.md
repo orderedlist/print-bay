@@ -187,8 +187,11 @@ orderedlist/print-bay with the `.dmg` (for new installs), the `.zip` and
 exported from Keychain Access as a `.p12`, then `base64 -i cert.p12`),
 `MAC_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and
 `APPLE_TEAM_ID` (`BJ2LT5F6JX`). To release from this Mac instead, bump `version` in
-`app/desktop/package.json`, then `GH_TOKEN=$(gh auth token) npm run release`
-in `app/`.
+`app/desktop/package.json`, run `npm run dist:notarize` in `app/`, then from
+`app/desktop/release`: `gh release create v<version> latest-mac.yml
+Print-Bay-*.dmg Print-Bay-*.zip Print-Bay-*.blockmap`. Each release must hold
+all of those, and only one release per tag: the app reads `latest-mac.yml`
+from the newest one.
 
 The installed app (`app/desktop/updater.js`) checks that feed at launch and
 every four hours, downloads a newer version in the background, and offers to

@@ -30,13 +30,24 @@ jobs:
       - name: Set the version from the tag
         run: npm version "${GITHUB_REF_NAME#v}" -w desktop --no-git-tag-version --allow-same-version
 
-      - name: Build, sign, notarize and publish
-        run: npm run release
+      - name: Build, sign and notarize
+        run: npm run dist:notarize
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # the Developer ID Application certificate, exported as a .p12 and base64-encoded
           CSC_LINK: ${{ secrets.MAC_CERTIFICATE_P12_BASE64 }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      # One release with every file, made public only once they're all up. (electron-builder's
+      # own publishing uploads the .dmg and .zip in parallel, and each made its own release.)
+      - name: Publish the release
+        working-directory: app/desktop/release
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --title "${GITHUB_REF_NAME#v}" --generate-notes \
+            latest-mac.yml Print-Bay-*.dmg Print-Bay-*.zip Print-Bay-*.blockmap
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
