@@ -356,7 +356,10 @@ select.field { padding: 0 8px; }
 }
 
 /* a multi-part model's part picker, under its title */
-.parts { display: grid; gap: 6px; margin-top: 10px; }
+.parts { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-top: 10px; }
 .parts-row { display: grid; grid-template-columns: 52px 1fr; align-items: center; gap: 8px; font-size: 12px; }
 .parts-row .seg button { flex: 1; min-width: 0; padding: 0 4px; gap: 5px; }
+.seg-col { flex-direction: column; }
+.seg-col button { justify-content: flex-start; padding: 0 10px; min-width: 0; }
+.seg-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .swatch { width: 8px; height: 8px; border-radius: 50%; flex: none; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.25); }
