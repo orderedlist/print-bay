@@ -1,8 +1,8 @@
-// The nozzle on the K2. Klipper's config always says 0.4 and Creality doesn't report a swap,
+// The nozzle on each printer. Klipper's config always says 0.4 and Creality doesn't report a swap,
 // so it's set in the app and remembered here; slicing and printing use it (see NOZZLE_PROFILES, which slicer.ts swaps in).
 import fs from "node:fs";
 import path from "node:path";
-import { CACHE } from "./config.js";
+import { CACHE, isThisPrinter, PRINTER_ID } from "./config.js";
 
 export const NOZZLES = ["0.4", "0.6"] as const;
 export type Nozzle = (typeof NOZZLES)[number];
@@ -14,19 +14,34 @@ export const NOZZLE_PROFILES: Record<Nozzle, string[]> = {
 };
 export const isNozzle = (n: unknown): n is Nozzle => NOZZLES.includes(n as Nozzle);
 
+// { printers: { <printer id>: nozzle } } (PRINTER_ID). A file from before there could be several
+// printers holds just { nozzle }: it becomes the setting of the printer in use.
 const FILE = path.join(CACHE, "printer.json");
-let current: Nozzle = (() => {
+interface Saved { nozzle?: string; printers?: Record<string, string> }
+let saved: Record<string, string> = (() => {
   try {
-    const saved = JSON.parse(fs.readFileSync(FILE, "utf8")).nozzle;
-    return isNozzle(saved) ? saved : STOCK;
-  } catch {
-    return STOCK;
-  }
+    const file = JSON.parse(fs.readFileSync(FILE, "utf8")) as Saved;
+    return file.printers ?? (file.nozzle && PRINTER_ID ? { [PRINTER_ID]: file.nozzle } : {});
+  } catch { return {}; }
 })();
 
-export const getNozzle = () => current;
+export function getNozzle(): Nozzle {
+  const n = Object.entries(saved).find(([id]) => isThisPrinter(id))?.[1];
+  return isNozzle(n) ? n : STOCK;
+}
+
+const write = () => fs.writeFileSync(FILE, JSON.stringify({ printers: saved }, null, 2));
 
 export function setNozzle(n: Nozzle) {
-  current = n;
-  fs.writeFileSync(FILE, JSON.stringify({ nozzle: n }, null, 2));
+  if (!PRINTER_ID) throw Object.assign(new Error("Set up a printer first, in Settings."), { statusCode: 409 });
+  saved = { ...Object.fromEntries(Object.entries(saved).filter(([id]) => !isThisPrinter(id))), [PRINTER_ID]: n };
+  write();
+}
+
+/** A printer kept by its address is now kept by its name: so is its nozzle (one already set by name stays). */
+export function rekey(from: string, to: string) {
+  if (!(from in saved)) return;
+  const { [from]: n, ...rest } = saved;
+  saved = { [to]: n, ...rest };
+  write();
 }

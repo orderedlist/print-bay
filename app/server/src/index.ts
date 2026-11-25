@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
-import { CAMERA_URL, DATA, HOST, K2_HOST, normalizeHost, PORT, WEB_DIST } from "./config.js";
+import { CAMERA_URL, DATA, HOST, K2_HOST, normalizeHost, PORT, PRINTER_LABEL, WEB_DIST } from "./config.js";
 import { bus, publish } from "./events.js";
 import { getJob, getModel, isMaterial, listJobs, listModels, rates, scadParams, setScadParams, writePlate } from "./jobs.js";
 import { meshFor } from "./mesh.js";
@@ -12,6 +12,7 @@ import { isNozzle, setNozzle, getNozzle } from "./nozzle.js";
 import { checkModel } from "./modelchecks.js";
 import { toolpathsFor } from "./gcode.js";
 import * as moonraker from "./moonraker.js";
+import * as printers from "./printers.js";
 import { getQueue, print, removeEntry, startNext } from "./printing.js";
 import { isSlicing, slice, stopSlices } from "./slice.js";
 import * as agent from "./agent.js";
@@ -52,10 +53,27 @@ export async function start(opts: StartOptions = {}) {
   let status: moonraker.PrinterStatus = { ...moonraker.OFFLINE, message: "Connecting to the printer…" };
   let closed = false;
   let poll: NodeJS.Timeout | null = null;
-  const pollStatus = async () => {
-    status = await moonraker.getStatus();
+  /** Ask the printer in use how it is; an answer from one switched away from meanwhile is dropped. */
+  const pollPrinter = async () => {
+    const asked = K2_HOST;
+    const s = await moonraker.getStatus();
+    if (asked !== K2_HOST) return;
+    status = s;
     publish("status", status);
+    printers.onStatus(status, printerChanged); // follows the printer to a new address
+  };
+  const pollStatus = async () => {
+    await pollPrinter();
     if (!closed) poll = setTimeout(pollStatus, 2000);
+  };
+  const printerView = () => ({ host: K2_HOST, camera: CAMERA_URL, nozzle: getNozzle(), printers: printers.list() });
+  /** Another printer in use, or this one at a new address: show it, its queue and its slices at once. */
+  const printerChanged = () => {
+    printers.reset();
+    publish("printer", printerView());
+    publish("queue", getQueue());
+    publish("models", null); // each printer has its own nozzle, so its own slices
+    void pollPrinter();
   };
   void pollStatus();
   app.addHook("onClose", async () => { closed = true; if (poll) clearTimeout(poll); stopSlices(); });
@@ -78,17 +96,34 @@ export async function start(opts: StartOptions = {}) {
   });
 
   // ---- printer ----
-  app.get("/api/printer", async () => ({ host: K2_HOST, camera: CAMERA_URL, nozzle: getNozzle() }));
+  app.get("/api/printer", async () => printerView());
+  // switching between saved printers works from anywhere; adding one is in Settings, on this computer
+  app.put<{ Body: { host?: string } }>("/api/printer/active", async (req) => {
+    printers.use(req.body?.host ?? "");
+    printerChanged();
+    return printerView();
+  });
   app.put<{ Body: { nozzle?: string } }>("/api/printer/nozzle", async (req, reply) => {
     const nozzle = req.body?.nozzle;
     if (!isNozzle(nozzle)) return reply.status(400).send({ error: `Unknown nozzle "${nozzle}"` });
     setNozzle(nozzle);
+    publish("printer", printerView());
     publish("models", null); // every job's slice and stats are for the nozzle now set
     return { nozzle };
   });
   app.get("/api/status", async () => status);
+  /** A browser acts on the printer it shows; if another is in use now (switched in another tab), it has to look again. */
+  const showing = (printer: string | undefined) => {
+    if (printer !== undefined && printer !== PRINTER_LABEL)
+      throw Object.assign(new Error(`Print Bay is using ${PRINTER_LABEL ?? "no printer"} now, not ${printer}. Check the Printer tab and try again.`), { statusCode: 409 });
+  };
   for (const action of ["pause", "resume", "cancel"] as const) {
-    app.post(`/api/printer/${action}`, async () => {
+    app.post<{ Body: { printer?: string } }>(`/api/printer/${action}`, async (req) => {
+      showing(req.body?.printer);
+      const asked = PRINTER_LABEL ?? undefined;
+      const now = await moonraker.getStatus(); // still there, and still the same printer
+      showing(asked); // not switched meanwhile
+      if (!now.online) throw Object.assign(new Error(now.message || `Can't reach ${PRINTER_LABEL}`), { statusCode: 503 });
       await moonraker[action]();
       return { ok: true };
     });
@@ -172,10 +207,15 @@ export async function start(opts: StartOptions = {}) {
   });
 
   // ---- printing ----
-  app.post<{ Body: Parameters<typeof print>[0] }>("/api/print", async (req) =>
-    print(req.body));
+  app.post<{ Body: Parameters<typeof print>[0] & { printer?: string } }>("/api/print", async (req) => {
+    showing(req.body?.printer);
+    return print(req.body);
+  });
   app.get("/api/queue", async () => getQueue());
-  app.post("/api/queue/next", async () => startNext());
+  app.post<{ Body: { printer?: string } }>("/api/queue/next", async (req) => {
+    showing(req.body?.printer);
+    return startNext();
+  });
   app.delete<{ Params: { id: string } }>("/api/queue/:id", async (req) => {
     removeEntry(req.params.id);
     return getQueue();
@@ -210,9 +250,8 @@ export async function start(opts: StartOptions = {}) {
   app.get("/api/settings", async () => ({ ...settings.view(), desktop }));
   app.put<{ Body: settings.SettingsUpdate }>("/api/settings", async (req) => {
     if (!local(req.ip)) throw localOnly("Change settings");
-    const v = { ...settings.update(req.body ?? {}), desktop };
-    status = await moonraker.getStatus(); // a new printer address shows at once
-    publish("status", status);
+    const v = { ...(await settings.update(req.body ?? {})), desktop };
+    if (req.body?.printer || req.body?.forgetPrinter) printerChanged(); // a new printer shows at once
     return v;
   });
   app.post("/api/settings/scan-printers", async () => moonraker.scanForPrinters());
@@ -280,6 +319,7 @@ export async function start(opts: StartOptions = {}) {
     const send = (e: { type: string; data: unknown }) => res.write(`event: ${e.type}\ndata: ${JSON.stringify(e.data)}\n\n`);
     send({ type: "status", data: status });
     send({ type: "queue", data: getQueue() });
+    send({ type: "printer", data: printerView() });
     send({ type: "update", data: opts.updates?.status() ?? null });
     bus.on("event", send);
     const ping = setInterval(() => res.write(": ping\n\n"), 25_000);

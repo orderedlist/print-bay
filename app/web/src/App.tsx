@@ -107,7 +107,7 @@ export function App() {
             <span style={{ fontSize: 12 }}>{setup ? "A workspace for your Creality K2: models, slicing and printing" : "For this computer and its printer"}</span>
           </div>
         ) : route.left === "printer" ? (
-          <Camera openSettings={() => go("/settings")} />
+          <Camera key={live.printer?.host ?? ""} openSettings={() => go("/settings")} /> /* a new printer: its own camera */
         ) : selected ? (
           <ModelWorkspace key={selected.id} model={selected} live={live} caps={caps} tab={tab} setTab={setTab}
             jobName={parts[selected.id] ?? null} setJobName={(job) => setParts((p) => ({ ...p, [selected.id]: job }))} theme={theme} toggleTheme={toggleTheme}
