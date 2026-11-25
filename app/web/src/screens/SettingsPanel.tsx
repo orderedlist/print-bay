@@ -45,6 +45,11 @@ export function SettingsPanel({ settings, setSettings, setup, toast }: Props) {
         </div>
       </div>
       <RatesSection rates={settings.rates} save={save} />
+      {settings.desktop.version && (
+        <div className="sec faint" style={{ fontSize: 12 }}>
+          Print Bay {settings.desktop.version} · updates itself from GitHub Releases (Print Bay → Check for Updates…)
+        </div>
+      )}
       {setup && (
         <div className="sec">
           {missingRequired.length > 0 && (

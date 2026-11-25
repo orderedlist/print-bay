@@ -24,9 +24,9 @@ function ago(ms: number): string {
   return `${Math.round(m / 1440)}d ago`;
 }
 
-interface PullResult { repos: Repo[]; pulled: number; appChanged: boolean; stashConflict: boolean }
+interface PullResult { repos: Repo[]; pulled: number; stashConflict: boolean }
 
-/** Git for the library and the app: what changed, commit it, pull and push it. */
+/** Git for the library: what changed, commit it, pull and push it. */
 export function ChangesPanel({ repos, setRepos, toast }: Props) {
   // fetch while this is open, so "to pull" is current (the server limits it to once a minute)
   useEffect(() => {
@@ -35,7 +35,7 @@ export function ChangesPanel({ repos, setRepos, toast }: Props) {
     addEventListener("focus", load);
     return () => removeEventListener("focus", load);
   }, [setRepos]);
-  if (!repos.length) return <div className="sec muted">Neither the library nor the app is a git repository.</div>;
+  if (!repos.length) return <div className="sec muted">The library isn't a git repository.</div>;
   return <>{repos.map((r) => <RepoSection key={r.id} repo={r} setRepos={setRepos} toast={toast} />)}</>;
 }
 
@@ -62,7 +62,7 @@ function RepoSection({ repo, setRepos, toast }: { repo: Repo } & Omit<Props, "re
       setRepos(r.repos);
       if (r.stashConflict) toast("Pulled, but your uncommitted edits clash with it. They're kept in git's stash: run git stash pop in a terminal.", true);
       else toast(!r.pulled ? "Already up to date."
-        : `Pulled ${r.pulled} ${r.pulled === 1 ? "commit" : "commits"}.${r.appChanged ? " The app's code changed: restart Print Bay to use it." : ""}`);
+        : `Pulled ${r.pulled} ${r.pulled === 1 ? "commit" : "commits"}.`);
     } catch (e) { toast((e as Error).message, true); }
     setBusy(null);
   };

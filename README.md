@@ -238,22 +238,21 @@ chats run inside the library.
 
 ### Changes (git)
 
-The library and the app's code are each a git repo, and the **Changes** tab
-commits and pushes them. A new library becomes a repo on first run, ignoring
+The library is a git repo, and the **Changes** tab commits, pulls and
+pushes it. The app's own code isn't there: it updates from GitHub Releases
+(see Releases and updates), and **Settings** shows which version is running. A new library becomes a repo on first run, ignoring
 `gcode/` and `.cache/`. Commit takes everything that changed (`git add -A`),
 with a suggested message like "Update tote-rack". Push uses your own git
 sign-in (SSH key or credential helper) and never prompts, so push once from a
 terminal if it can't sign in. Without a remote, the tab asks for one, and only
-the computer running Print Bay can set it. In a checkout that is its own
-library, the library and the app are one repo.
+the computer running Print Bay can set it.
 
 **Pull** rebases your commits onto the remote's and keeps uncommitted edits.
 It won't start if you've edited a file the pull changes (commit first), and if
 your commits and the remote's change the same lines it backs out with nothing
 changed, for you to merge in a terminal. The tab fetches while it's open, at
 most once a minute, so it can show what's waiting. Commit and Pull wait while
-Claude is editing. A pull that changes `app/` takes effect after a restart;
-changes to `scripts/` apply at once.
+Claude is editing.
 
 ### Claude
 
