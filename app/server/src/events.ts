@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 
-/** Everything pushed to browsers over SSE: `status`, `queue`, `slice`, `models`. */
+/** Everything pushed to browsers over SSE: `printers`, `queue`, `slice`, `models`. */
 export const bus = new EventEmitter();
 bus.setMaxListeners(100);
 

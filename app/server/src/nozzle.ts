@@ -2,7 +2,7 @@
 // so it's set in the app and remembered here; slicing and printing use it (see NOZZLE_PROFILES, which slicer.ts swaps in).
 import fs from "node:fs";
 import path from "node:path";
-import { CACHE, isThisPrinter, PRINTER_ID } from "./config.js";
+import { CACHE, PRINTERS } from "./config.js";
 
 export const NOZZLES = ["0.4", "0.6"] as const;
 export type Nozzle = (typeof NOZZLES)[number];
@@ -14,34 +14,25 @@ export const NOZZLE_PROFILES: Record<Nozzle, string[]> = {
 };
 export const isNozzle = (n: unknown): n is Nozzle => NOZZLES.includes(n as Nozzle);
 
-// { printers: { <printer id>: nozzle } } (PRINTER_ID). A file from before there could be several
-// printers holds just { nozzle }: it becomes the setting of the printer in use.
+// { printers: { <printer id>: nozzle } }: 0.3 kept them by the printer's name (or address), which is
+// the id it has here (config.ts savedPrinters). A file from before there could be several printers
+// holds just { nozzle }: it was the first printer's.
 const FILE = path.join(CACHE, "printer.json");
 interface Saved { nozzle?: string; printers?: Record<string, string> }
 let saved: Record<string, string> = (() => {
   try {
     const file = JSON.parse(fs.readFileSync(FILE, "utf8")) as Saved;
-    return file.printers ?? (file.nozzle && PRINTER_ID ? { [PRINTER_ID]: file.nozzle } : {});
+    return file.printers ?? (file.nozzle && PRINTERS[0] ? { [PRINTERS[0].id]: file.nozzle } : {});
   } catch { return {}; }
 })();
 
-export function getNozzle(): Nozzle {
-  const n = Object.entries(saved).find(([id]) => isThisPrinter(id))?.[1];
+/** The nozzle on a printer (by id); the stock one when it's never been set, or for no printer. */
+export function getNozzle(printer: string | null | undefined): Nozzle {
+  const n = printer ? saved[printer] : undefined;
   return isNozzle(n) ? n : STOCK;
 }
 
-const write = () => fs.writeFileSync(FILE, JSON.stringify({ printers: saved }, null, 2));
-
-export function setNozzle(n: Nozzle) {
-  if (!PRINTER_ID) throw Object.assign(new Error("Set up a printer first, in Settings."), { statusCode: 409 });
-  saved = { ...Object.fromEntries(Object.entries(saved).filter(([id]) => !isThisPrinter(id))), [PRINTER_ID]: n };
-  write();
-}
-
-/** A printer kept by its address is now kept by its name: so is its nozzle (one already set by name stays). */
-export function rekey(from: string, to: string) {
-  if (!(from in saved)) return;
-  const { [from]: n, ...rest } = saved;
-  saved = { [to]: n, ...rest };
-  write();
+export function setNozzle(printer: string, n: Nozzle) {
+  saved = { ...saved, [printer]: n };
+  fs.writeFileSync(FILE, JSON.stringify({ printers: saved }, null, 2));
 }

@@ -5,17 +5,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { CACHE, isThisPrinter, PRINTER_ID } from "./config.js";
+import { CACHE, PRINTERS } from "./config.js";
 import { publish } from "./events.js";
 import { gcodePath, getJob, hexFor, isMaterial, isStale, type Material } from "./jobs.js";
 import * as moonraker from "./moonraker.js";
+import { printer, refresh } from "./printers.js";
 import { slice } from "./slice.js";
+import { getNozzle } from "./nozzle.js";
 
 const MAX_COLOR_DISTANCE = 120;
 const SAME_COLOR = 20; // closer than this, two spools are the same colour and a colour alone can't pick between them
 
 export interface QueueEntry {
   id: string;
+  printer: string; // the printer's id: the file is uploaded to it
   job: string;
   color: string;
   hex: string;
@@ -26,60 +29,39 @@ export interface QueueEntry {
   filename: string; // already uploaded to the printer
   copy: number;
   of: number;
-  printer?: string; // uploaded to: its name, or its address until it had one
 }
 
-interface QueueState { active: QueueEntry | null; entries: QueueEntry[] }
+/** `active`: what each printer was last started on, by printer id. */
+interface QueueState { active: Record<string, QueueEntry>; entries: QueueEntry[] }
 
-// Each printer has its own queue: a copy is uploaded to one printer and can only start there.
-// Every printer's copies are kept in one list, tagged with the printer; `running` holds the
-// copy each printer last started. A file from before there could be several holds `active`,
-// and copies with no printer: they were all for the printer in use.
 const QUEUE_FILE = path.join(CACHE, "queue.json");
-const state: { running: QueueEntry[]; entries: QueueEntry[] } = (() => {
-  if (!fs.existsSync(QUEUE_FILE)) return { running: [], entries: [] };
-  const file = JSON.parse(fs.readFileSync(QUEUE_FILE, "utf8"));
-  let tagged = false;
-  const mine = (e: QueueEntry): QueueEntry => {
-    if (e.printer || !PRINTER_ID) return e;
-    tagged = true;
-    return { ...e, printer: PRINTER_ID };
-  };
-  const state = { running: (file.running ?? (file.active ? [file.active] : [])).map(mine), entries: (file.entries ?? []).map(mine) };
-  try { if (tagged) fs.writeFileSync(QUEUE_FILE, JSON.stringify(state, null, 2)); } // kept for that printer, whichever is in use next time
-  catch (e) { console.warn(`Couldn't save which printer the queued copies are for: ${(e as Error).message}`); }
-  return state;
-})();
+let state: QueueState = load();
 
-const forThisPrinter = (e: QueueEntry) => isThisPrinter(e.printer);
-
-/** The queue of the printer in use. */
-export const getQueue = (): QueueState => ({
-  active: state.running.find(forThisPrinter) ?? null,
-  entries: state.entries.filter(forThisPrinter),
-});
+/**
+ * The queue as saved. Print Bay 0.3 kept `running`, a list of what each printer last started, with
+ * copies tagged by the printer's name or address (its id here); before that, `active` and untagged
+ * copies were all the first printer's.
+ */
+function load(): QueueState {
+  if (!fs.existsSync(QUEUE_FILE)) return { active: {}, entries: [] };
+  const saved = JSON.parse(fs.readFileSync(QUEUE_FILE, "utf8")) as { active?: unknown; running?: QueueEntry[]; entries?: QueueEntry[] };
+  const first = PRINTERS[0]?.id ?? "";
+  const old = (e: QueueEntry): QueueEntry => (e.printer ? e : { ...e, printer: first });
+  const active: Record<string, QueueEntry> = saved.running ? Object.fromEntries(saved.running.map(old).map((e) => [e.printer, e]))
+    : !saved.active ? {}
+    : "filename" in (saved.active as object) ? { [first]: old(saved.active as QueueEntry) }
+    : saved.active as Record<string, QueueEntry>;
+  return { active, entries: (saved.entries ?? []).map(old) };
+}
 
 function save() {
   fs.writeFileSync(QUEUE_FILE, JSON.stringify(state, null, 2));
-  publish("queue", getQueue());
+  publish("queue", state);
 }
+
+export const getQueue = () => state;
 
 const fail = (message: string, statusCode = 400) => Object.assign(new Error(message), { statusCode });
-
-/** A printer kept by its address is now kept by its name: so are its copies. */
-export function rekey(from: string, to: string) {
-  const moved = [...state.running, ...state.entries].filter((e) => e.printer === from);
-  for (const e of moved) e.printer = to;
-  if (moved.length) save();
-}
-
-// Prints being sliced and sent: the printer in use can't change under one (see printers.ts).
-let sending = 0;
-export const isSending = () => sending > 0;
-async function whileSending<T>(work: () => Promise<T>): Promise<T> {
-  sending++;
-  try { return await work(); } finally { sending--; }
-}
 
 function rgb(hex: string) {
   const h = hex.replace("#", "");
@@ -122,8 +104,8 @@ function forSlots(gcode: string, slots: moonraker.Slot[]): string {
 }
 
 async function startEntry(entry: QueueEntry) {
-  await moonraker.start(entry.filename);
-  state.running = [...state.running.filter((e) => !forThisPrinter(e)), entry];
+  await moonraker.start(printer(entry.printer).host, entry.filename);
+  state.active[entry.printer] = entry;
 }
 
 /**
@@ -131,20 +113,18 @@ async function startEntry(entry: QueueEntry) {
  * multi-colour job its spool (by part name), defaulting to the job's own colours.
  * `material` slices for that filament; left out, it's what the printer has a picked spool set as (wood, silk; stone has no Creality id, so it's picked), else PLA.
  */
-export const print = (opts: PrintOptions) => whileSending(() => send(opts));
-
-type PrintOptions = {
+export async function print(opts: {
+  printer?: string; // its id; may be left out when there's only one
   job: string; color?: string; colors?: Record<string, string>;
   slot?: string; slots?: Record<string, string>; // the spools picked (T1A, EXT): exact where two hold the same colour
   copies: number; perPlate?: number; material?: string; startNow: boolean;
-};
-
-async function send(opts: PrintOptions) {
+}) {
   const job = getJob(opts.job);
   const copies = Math.max(1, Math.min(20, Math.floor(opts.copies))); // plates, one after another
   const perPlate = Math.max(1, Math.min(400, Math.floor(opts.perPlate ?? 1)));
-  const status = await moonraker.getStatus();
-  if (!status.online) throw fail("Can't reach the printer", 503);
+  const target = printer(opts.printer);
+  const status = await refresh(target.id);
+  if (!status.online) throw fail(`Can't reach ${target.name}`, 503);
   const colors = job.parts.length ? job.parts.map((p) => opts.colors?.[p.name] ?? p.color) : [opts.color ?? job.color ?? ""];
   if (!colors.every(Boolean)) throw fail("Pick a colour");
   const keys = job.parts.length ? job.parts.map((p) => p.name) : [""];
@@ -152,7 +132,7 @@ async function send(opts: PrintOptions) {
     const picked = job.parts.length ? opts.slots?.[keys[i]] : opts.slot;
     if (!picked) return findSlot(c, status.slots);
     const s = status.slots.find((x) => x.slot === picked);
-    if (!s) throw fail(`The printer reports nothing in ${picked}`, 409);
+    if (!s) throw fail(`${target.name} reports nothing in ${picked}`, 409);
     return s;
   });
   const slot = slots[0];
@@ -164,17 +144,22 @@ async function send(opts: PrintOptions) {
   if (material !== "pla" && perPlate > 1) throw fail(`Several to a plate isn't set up for ${material} yet`);
   if (job.plate && perPlate > 1) throw fail("A plate is laid out already; print more of it as copies");
   if (opts.startNow && !moonraker.IDLE_STATES.has(status.state))
-    throw fail(`The printer is ${status.state}; add it to the queue instead`, 409);
+    throw fail(`${target.name} is ${status.state}; add it to the queue instead`, 409);
 
-  if (isStale(job, perPlate, material, oneColor)) await slice(job.name, perPlate, material, oneColor);
-  const file = forSlots(gcodePath(job.name, perPlate, material, undefined, oneColor), feeds);
-  await moonraker.upload(file);
+  const nozzle = getNozzle(target.id); // sliced for the nozzle on the printer it's going to
+  if (isStale(job, perPlate, material, oneColor, nozzle)) await slice(job.name, perPlate, material, oneColor, nozzle);
+  const file = forSlots(gcodePath(job.name, perPlate, material, nozzle, oneColor), feeds);
+  // slicing can take a while: check it's still that printer at that address before sending
+  const now = await refresh(target.id);
+  if (!now.online) throw fail(`Can't reach ${target.name} now`, 503);
+  if (opts.startNow && !moonraker.IDLE_STATES.has(now.state)) throw fail(`${target.name} is ${now.state} now; add it to the queue instead`, 409);
+  await moonraker.upload(printer(target.id).host, file);
 
   const entries = Array.from({ length: copies }, (_, i): QueueEntry => ({
-    id: randomUUID(), job: job.name, color: oneColor ? colors[0] : colors.join(" + "), hex: slot.color,
+    id: randomUUID(), printer: target.id, job: job.name, color: oneColor ? colors[0] : colors.join(" + "), hex: slot.color,
     ...(feeds.length > 1 ? { hexes: feeds.map((s) => s.color) } : {}), slot: feeds.map((s) => s.slot).join(" + "),
     ...(perPlate > 1 ? { perPlate } : {}), ...(material === "pla" ? {} : { material }),
-    filename: path.basename(file), copy: i + 1, of: copies, printer: PRINTER_ID ?? undefined,
+    filename: path.basename(file), copy: i + 1, of: copies,
   }));
   let started = false;
   if (opts.startNow) {
@@ -186,17 +171,25 @@ async function send(opts: PrintOptions) {
   return { started, queued: entries.length, slot: feeds.map((s) => s.slot).join(" + ") };
 }
 
-/** Start the next queued copy once someone confirms the bed is clear. */
-export const startNext = () => whileSending(async () => {
-  const next = state.entries.find(forThisPrinter);
-  if (!next) throw fail("The queue is empty", 409);
-  const status = await moonraker.getStatus();
-  if (!moonraker.IDLE_STATES.has(status.state)) throw fail(`The printer is ${status.state}`, 409);
+/** Start a printer's next queued copy once someone confirms its bed is clear. */
+export async function startNext(printerId: string) {
+  const p = printer(printerId);
+  const next = state.entries.find((e) => e.printer === p.id);
+  if (!next) throw fail(`Nothing queued for ${p.name}`, 409);
+  const status = await refresh(p.id);
+  if (!moonraker.IDLE_STATES.has(status.state)) throw fail(`${p.name} is ${status.state}`, 409);
   await startEntry(next);
   state.entries = state.entries.filter((e) => e !== next);
   save();
   return next;
-});
+}
+
+/** A printer was removed in Settings: its queue goes with it (the files were uploaded to it). */
+export function forgetPrinter(id: string) {
+  delete state.active[id];
+  state.entries = state.entries.filter((e) => e.printer !== id);
+  save();
+}
 
 export function removeEntry(id: string) {
   state.entries = state.entries.filter((e) => e.id !== id);

@@ -1,12 +1,13 @@
 // Setup and Settings: the printer, the tools the app shells out to, cost rates, and the library.
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  APP_ROOT, chooseLibrary, DATA, DEFAULT_LIBRARY, LIBRARY_SOURCE, readSettings, resolvePrinter, resolveTool, writeSettings,
-  type LibrarySource, type Settings, type Source, type ToolName,
+  APP_ROOT, chooseLibrary, DATA, DEFAULT_LIBRARY, LIBRARY_SOURCE, normalizeHost, readSettings, resolvePrinters, resolveTool, toSaved, writeSettings,
+  type LibrarySource, type PrinterConfig, type Settings, type Source, type ToolName,
 } from "./config.js";
 import { rates, type Rates } from "./jobs.js";
-import * as printers from "./printers.js";
+import { sameIdentity, type FoundPrinter } from "./moonraker.js";
 
 export interface ToolStatus {
   name: ToolName;
@@ -22,7 +23,7 @@ export interface ToolStatus {
 
 export interface SettingsView {
   needsSetup: boolean;
-  printer: { host: string | null; source: Source; saved: printers.KnownPrinter[] };
+  printers: { list: PrinterConfig[]; source: Source };
   tools: ToolStatus[];
   rates: Rates;
   /** `next`: chosen in Settings, used from the next start */
@@ -63,7 +64,7 @@ export function view(): SettingsView {
   return {
     // a checkout that is its own library was set up before settings existed
     needsSetup: !s.setupDone && path.resolve(DATA) !== path.resolve(APP_ROOT),
-    printer: { ...resolvePrinter(s), saved: printers.list(s) },
+    printers: (({ printers, source }) => ({ list: printers, source }))(resolvePrinters(s)),
     tools,
     rates: rates(),
     library: { path: DATA, source: LIBRARY_SOURCE, fresh: libraryFresh(), next: nextLibrary, default: DEFAULT_LIBRARY },
@@ -75,16 +76,12 @@ let nextLibrary: string | null = null; // chosen this run; the server reads the 
 
 export interface SettingsUpdate {
   library?: string | null; // a folder to use from the next start; null: the default
-  printer?: string; // an address: save that printer (if it isn't) and use it
-  forgetPrinter?: string; // a saved printer's address
   tools?: Partial<Record<ToolName, string | null>>; // null: find it again
   rates?: Partial<Rates>;
   setupDone?: boolean;
 }
 
-export async function update(u: SettingsUpdate): Promise<SettingsView> {
-  if (u.printer) await printers.add(u.printer);
-  if (u.forgetPrinter) printers.forget(u.forgetPrinter);
+export function update(u: SettingsUpdate): SettingsView {
   const s = readSettings();
   if (u.tools) {
     s.tools = { ...s.tools };
@@ -115,6 +112,100 @@ export async function update(u: SettingsUpdate): Promise<SettingsView> {
   }
   writeSettings(s);
   return view();
+}
+
+// ---- printers ----
+
+export interface PrinterInput { name?: string; host?: string; hostname?: string | null; mac?: string | null }
+
+/** The printers to change: settings.json's list, or the one printer kept from before there could be several. */
+function editablePrinters(): { s: Settings; list: PrinterConfig[] } {
+  const s = readSettings();
+  const { printers, source } = resolvePrinters(s);
+  if (source === "env") throw fail("K2_HOST sets the printer; unset it to set up printers here.", 409);
+  return { s, list: printers.map((p) => ({ ...p })) };
+}
+
+function savePrinters(s: Settings, list: PrinterConfig[]): PrinterConfig[] {
+  // Print Bay 0.3 uses one printer at a time, `printer`: keep the one it was using (at its address now), else the first
+  const inUse = resolvePrinters(s).printers.find((p) => p.host === s.printer)?.id;
+  Object.assign(s, toSaved(list));
+  s.printer = list.find((p) => p.id === inUse)?.host ?? list[0]?.host;
+  if (!s.printer) delete s.printer;
+  writeSettings(s);
+  return list;
+}
+
+function checkName(raw: string | undefined, list: PrinterConfig[], self?: string): string {
+  const name = (raw ?? "").trim().replace(/\s+/g, " ");
+  if (!name) throw fail("Give the printer a name");
+  if (name.length > 40) throw fail("Keep the name under 40 characters");
+  if (list.some((p) => p.id !== self && p.name.toLowerCase() === name.toLowerCase())) throw fail(`There's already a printer called ${name}`);
+  return name;
+}
+
+function checkHost(raw: string | undefined, list: PrinterConfig[], self?: string): string {
+  const host = normalizeHost(raw ?? "");
+  const other = list.find((p) => p.id !== self && p.host === host);
+  if (other) throw fail(`${other.name} is already at ${host.replace(/:7125$/, "")}`);
+  return host;
+}
+
+export function addPrinter(input: PrinterInput): PrinterConfig {
+  const { s, list } = editablePrinters();
+  const p: PrinterConfig = { id: randomBytes(4).toString("hex"), name: checkName(input.name, list), host: checkHost(input.host, list) };
+  if (input.hostname) p.hostname = input.hostname;
+  if (input.mac) p.mac = input.mac;
+  savePrinters(s, [...list, p]);
+  return p;
+}
+
+export function updatePrinter(id: string, input: PrinterInput): PrinterConfig {
+  const { s, list } = editablePrinters();
+  const p = list.find((x) => x.id === id);
+  if (!p) throw fail(`No printer ${id}`, 404);
+  if (input.name !== undefined) p.name = checkName(input.name, list, id);
+  if (input.host !== undefined && normalizeHost(input.host) !== p.host) p.host = checkHost(input.host, list, id);
+  if (input.hostname) p.hostname = input.hostname;
+  else if (input.hostname === null) delete p.hostname;
+  if (input.mac) p.mac = input.mac;
+  else if (input.mac === null) delete p.mac;
+  savePrinters(s, list);
+  return p;
+}
+
+export interface Moved { id: string; name: string; from: string; to: string }
+
+/**
+ * After a scan: learn what identifies each saved printer it found at its address, and follow any
+ * saved printer that turns up at a new one. Returns the printers that moved.
+ */
+export function applyScan(found: FoundPrinter[]): Moved[] {
+  const s = readSettings();
+  const { printers, source } = resolvePrinters(s);
+  if (source === "env" || source === "missing") return [];
+  const known = (p: PrinterConfig) => !!(p.mac || p.hostname);
+  const moved: Moved[] = [];
+  const list = printers.map((p): PrinterConfig => {
+    // a known printer is wherever its MAC or name turns up, even if the router swapped two printers' addresses
+    // one not known yet is whoever answers at its address, unless that's another saved printer
+    // and the only printer saved, with nothing to know it by, is the only one found (as 0.3 did)
+    const f = known(p) ? found.find((x) => sameIdentity(p, x))
+      : found.find((x) => x.host === p.host && !printers.some((o) => o !== p && known(o) && sameIdentity(o, x)))
+        ?? (printers.length === 1 && found.length === 1 ? found[0] : undefined);
+    if (!f) return p;
+    if (f.host !== p.host) moved.push({ id: p.id, name: p.name, from: p.host, to: f.host });
+    return { ...p, host: f.host, hostname: p.hostname ?? f.hostname, ...(p.mac || f.mac ? { mac: p.mac ?? f.mac! } : {}) };
+  });
+  // a printer not seen keeps its old address even if another has moved onto it: polling there finds the other printer, says so, and keeps looking
+  if (JSON.stringify(list) !== JSON.stringify(printers)) savePrinters(s, list);
+  return moved;
+}
+
+export function removePrinter(id: string): void {
+  const { s, list } = editablePrinters();
+  if (!list.some((p) => p.id === id)) throw fail(`No printer ${id}`, 404);
+  savePrinters(s, list.filter((p) => p.id !== id));
 }
 
 function writeRates(r: Rates): void {

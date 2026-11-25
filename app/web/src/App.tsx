@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useLive, useModels, useRepos, useSettings } from "./api";
+import { useCurrentPrinter, useLive, useModels, useRepos, useSettings } from "./api";
 import { Camera } from "./components/Camera";
 import { ICONS, Toolbar } from "./components/Toolbar";
 import { ChangesPanel } from "./screens/ChangesPanel";
@@ -41,8 +41,10 @@ function useNarrow() {
 
 export function App() {
   const live = useLive();
+  const [printer, pickPrinter] = useCurrentPrinter(live.printers);
   const updateReady = live.update?.state === "ready";
-  const models = useModels(live.modelsVersion);
+  // slices are per nozzle, and each printer has its own: a printer with another nozzle refetches
+  const models = useModels(live.modelsVersion, printer?.id ?? null);
   const [repos, setRepos] = useRepos(live.modelsVersion);
   const changed = repos?.reduce((n, r) => n + r.changes.length, 0) ?? 0;
   const [settings, setSettings] = useSettings();
@@ -92,7 +94,7 @@ export function App() {
   const creating = route.left === "create" && !setup && caps.claude;
   const rightW = selected || creating ? RIGHT_W : 0;
   const shift = narrow ? 0 : ((LEFT_W + GAP) - (rightW ? rightW + GAP : 0)) / 2;
-  const [, stateColor] = stateLabel(live.status?.state ?? "offline");
+  const [, stateColor] = stateLabel(printer?.status.state ?? "offline");
   const newModelActions = caps.claude ? [{ label: "New model with Claude", icon: ICONS.plus, run: () => go("/create") }] : [];
   const showSettings = setup || route.left === "settings";
   const n = models?.length ?? 0;
@@ -104,12 +106,12 @@ export function App() {
           <div className="stage-hint">
             <svg width="40" height="40" viewBox="0 0 28 28" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true"><path d="M5 9 14 4l9 5v10l-9 5-9-5z" /><path d="M5 9l9 5 9-5M14 14v10" /></svg>
             <b>{setup ? "Welcome to Print Bay" : "Settings"}</b>
-            <span style={{ fontSize: 12 }}>{setup ? "A workspace for your Creality K2: models, slicing and printing" : "For this computer and its printer"}</span>
+            <span style={{ fontSize: 12 }}>{setup ? "A workspace for your Creality K2: models, slicing and printing" : "For this computer and its printers"}</span>
           </div>
         ) : route.left === "printer" ? (
-          <Camera key={live.printer?.host ?? ""} openSettings={() => go("/settings")} /> /* a new printer: its own camera */
+          <Camera key={printer?.id} camera={printer?.camera ?? null} openSettings={() => go("/settings")} />
         ) : selected ? (
-          <ModelWorkspace key={selected.id} model={selected} live={live} caps={caps} tab={tab} setTab={setTab}
+          <ModelWorkspace key={selected.id} model={selected} live={live} printer={printer} pickPrinter={pickPrinter} caps={caps} tab={tab} setTab={setTab}
             jobName={parts[selected.id] ?? null} setJobName={(job) => setParts((p) => ({ ...p, [selected.id]: job }))} theme={theme} toggleTheme={toggleTheme}
             shift={shift} inspectorSlot={inspectorSlot} close={() => go("/models")} goPrinter={() => go("/printer")} newModel={() => go("/create")} toast={toast} />
         ) : (
@@ -134,7 +136,7 @@ export function App() {
 
         <div className="toasts centered" role="status" aria-live="polite">
           {route.left === "printer" && !showSettings && (
-            <div className="toast"><span className="dot" style={{ background: stateColor }} />{printerCaption(live)}</div>
+            <div className="toast"><span className="dot" style={{ background: stateColor }} />{printerCaption(live.printers, printer)}</div>
           )}
           {toasts.map((t) => (
             <div key={t.id} className={t.error ? "toast toast-error" : "toast"}>
@@ -185,11 +187,11 @@ export function App() {
         </div>
         <div className="panel-body">
           {showSettings ? (
-            settings ? <SettingsPanel settings={settings} setSettings={setSettings} setup={setup} update={live.update} toast={toast} /> : <div className="sec muted">Loading…</div>
+            settings ? <SettingsPanel settings={settings} setSettings={setSettings} setup={setup} update={live.update} toast={toast} printers={live.printers} /> : <div className="sec muted">Loading…</div>
           ) : !models ? (
             <div className="sec muted">Loading…</div>
           ) : route.left === "printer" ? (
-            <PrinterPanel live={live} models={models} toast={toast} openModel={openModel} />
+            <PrinterPanel live={live} printer={printer} pickPrinter={pickPrinter} models={models} toast={toast} openModel={openModel} />
           ) : route.left === "changes" ? (
             repos ? <ChangesPanel repos={repos} setRepos={setRepos} toast={toast} /> : <div className="sec muted">Loading…</div>
           ) : (

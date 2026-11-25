@@ -4,7 +4,7 @@ import path from "node:path";
 import { parse } from "smol-toml";
 import { execFileSync } from "node:child_process";
 import { APP_ROOT, DATA, NURB_PYTHON } from "./config.js";
-import { getNozzle, NOZZLE_PROFILES, STOCK, type Nozzle } from "./nozzle.js";
+import { NOZZLE_PROFILES, STOCK, type Nozzle } from "./nozzle.js";
 
 export const COLORS: Record<string, string> = {
   black: "#000000", white: "#FFFFFF", grey: "#808080", gray: "#808080",
@@ -199,14 +199,15 @@ export function cost(grams: number, secs: number, r = rates()): Cost {
 /**
  * gcode/<job>.gcode, gcode/<job>-x<n>.gcode for n laid out on one plate, then -<material>
  * for a spool that isn't PLA, then -<nozzle>mm for a nozzle that isn't the stock 0.4 (slicer.ts
- * and scripts/slice use this too). The nozzle is the one set in the app unless given.
+ * and scripts/slice use this too). Each printer has its own nozzle (nozzle.ts), so callers say which.
  */
 /** `oneColor`: a multi-colour job sliced all on one filament, for when every part comes from the same spool. */
-export const gcodePath = (job: string, perPlate = 1, material: Material = "pla", nozzle: Nozzle = getNozzle(), oneColor = false) =>
-  abs(`gcode/${perPlate > 1 ? `${job}-x${perPlate}` : job}${oneColor ? "-1c" : ""}${material === "pla" ? "" : `-${material}`}${nozzle === STOCK ? "" : `-${nozzle}mm`}.gcode`);
+const nozzleSuffix = (nozzle: Nozzle) => (nozzle === STOCK ? "" : `-${nozzle}mm`);
+export const gcodePath = (job: string, perPlate = 1, material: Material = "pla", nozzle: Nozzle = STOCK, oneColor = false) =>
+  abs(`gcode/${perPlate > 1 ? `${job}-x${perPlate}` : job}${oneColor ? "-1c" : ""}${material === "pla" ? "" : `-${material}`}${nozzleSuffix(nozzle)}.gcode`);
 
-export function gcodeStats(job: string, r = rates(), perPlate = 1, material: Material = "pla", oneColor = false): Stats | null {
-  const file = gcodePath(job, perPlate, material, getNozzle(), oneColor);
+export function gcodeStats(job: string, r = rates(), perPlate = 1, material: Material = "pla", oneColor = false, nozzle: Nozzle = STOCK): Stats | null {
+  const file = gcodePath(job, perPlate, material, nozzle, oneColor);
   if (!fs.existsSync(file)) return null;
   const size = fs.statSync(file).size;
   const fd = fs.openSync(file, "r");
@@ -223,11 +224,10 @@ export function gcodeStats(job: string, r = rates(), perPlate = 1, material: Mat
 }
 
 /** Anything the slice depends on that changed after it. */
-export function isStale(job: Job, perPlate = 1, material: Material = "pla", oneColor = false): boolean {
-  const sliced = mtime(gcodePath(job.name, perPlate, material, getNozzle(), oneColor));
+export function isStale(job: Job, perPlate = 1, material: Material = "pla", oneColor = false, nozzle: Nozzle = STOCK): boolean {
+  const sliced = mtime(gcodePath(job.name, perPlate, material, nozzle, oneColor));
   if (!sliced) return true;
   const profiles = { ...job.profiles, ...(material === "pla" ? {} : { filament: MATERIAL_PROFILES[material] }) };
-  const nozzle = getNozzle();
   const parts = (job.plate ?? []).map((p) => listJobs().find((j) => j.name === p.job)).filter((j): j is Job => !!j); // a plate: its parts' jobs and models too
   const t = (p: string) => mtime(abs(p));
   const inputs = [job, ...parts].flatMap((j) => [t(j.file), modelTime(j.model)])
@@ -242,7 +242,10 @@ function byLabel(a: Job, b: Job): number {
   return numbered(a.label) - numbered(b.label) || a.label.localeCompare(b.label, undefined, { numeric: true });
 }
 
-export function listModels(): Model[] {
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Every model, with its jobs' slices for `nozzle` (the printer being looked at has it). */
+export function listModels(nozzle: Nozzle = STOCK): Model[] {
   const jobs = listJobs();
   const r = rates();
   const dir = abs("models");
@@ -272,16 +275,16 @@ export function listModels(): Model[] {
           hex: j.parts[0] ? hexFor(j.parts[0].color) : j.color ? hexFor(j.color) : null,
           parts: j.parts.map((p) => ({ ...p, hex: hexFor(p.color) })),
           copies: j.copies,
-          stats: gcodeStats(j.name, r),
-          stale: isStale(j),
+          stats: gcodeStats(j.name, r, 1, "pla", false, nozzle),
+          stale: isStale(j, 1, "pla", false, nozzle),
           plates: fs.readdirSync(abs("gcode"))
-            .map((f) => f.match(new RegExp(`^${j.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-x(\\d+)\\.gcode$`))?.[1])
+            .map((f) => f.match(new RegExp(`^${esc(j.name)}-x(\\d+)${esc(nozzleSuffix(nozzle))}\\.gcode$`))?.[1])
             .filter((n): n is string => !!n).map(Number).sort((a, b) => a - b)
-            .map((n) => ({ perPlate: n, stats: gcodeStats(j.name, r, n), stale: isStale(j, n) })),
-          materials: Object.fromEntries(OTHER_MATERIALS.map((m) => [m, { stats: gcodeStats(j.name, r, 1, m), stale: isStale(j, 1, m) }])) as ModelJob["materials"],
+            .map((n) => ({ perPlate: n, stats: gcodeStats(j.name, r, n, "pla", false, nozzle), stale: isStale(j, n, "pla", false, nozzle) })),
+          materials: Object.fromEntries(OTHER_MATERIALS.map((m) => [m, { stats: gcodeStats(j.name, r, 1, m, false, nozzle), stale: isStale(j, 1, m, false, nozzle) }])) as ModelJob["materials"],
           plate: j.plate ?? null,
           oneColor: j.parts.length > 1
-            ? Object.fromEntries((["pla", ...OTHER_MATERIALS] as Material[]).map((m) => [m, { stats: gcodeStats(j.name, r, 1, m, true), stale: isStale(j, 1, m, true) }])) as ModelJob["oneColor"]
+            ? Object.fromEntries((["pla", ...OTHER_MATERIALS] as Material[]).map((m) => [m, { stats: gcodeStats(j.name, r, 1, m, true, nozzle), stale: isStale(j, 1, m, true, nozzle) }])) as ModelJob["oneColor"]
             : null,
         })),
       };

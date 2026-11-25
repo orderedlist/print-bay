@@ -4,16 +4,16 @@ import fs from "node:fs";
 import path from "node:path";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
-import { CAMERA_URL, DATA, HOST, K2_HOST, normalizeHost, PORT, PRINTER_LABEL, WEB_DIST } from "./config.js";
+import { DATA, HOST, normalizeHost, PORT, WEB_DIST } from "./config.js";
 import { bus, publish } from "./events.js";
 import { getJob, getModel, isMaterial, listJobs, listModels, rates, scadParams, setScadParams, writePlate } from "./jobs.js";
 import { meshFor } from "./mesh.js";
-import { isNozzle, setNozzle, getNozzle } from "./nozzle.js";
+import { isNozzle, setNozzle, getNozzle, type Nozzle } from "./nozzle.js";
 import { checkModel } from "./modelchecks.js";
 import { toolpathsFor } from "./gcode.js";
 import * as moonraker from "./moonraker.js";
+import { forgetPrinter, getQueue, print, removeEntry, startNext } from "./printing.js";
 import * as printers from "./printers.js";
-import { getQueue, print, removeEntry, startNext } from "./printing.js";
 import { isSlicing, slice, stopSlices } from "./slice.js";
 import * as agent from "./agent.js";
 import * as repos from "./repos.js";
@@ -48,35 +48,9 @@ export interface Updates {
 export async function start(opts: StartOptions = {}) {
   const app = Fastify({ logger: !opts.quiet && { level: "warn" } });
   await repos.ensureLibraryRepo().catch((e) => console.warn(`Couldn't make the library a git repo: ${e.message}`));
-  // Listen right away; the printer may be off or its name slow to resolve. Poll every 2 s
-  // after the last answer, so a slow printer never has requests piling up.
-  let status: moonraker.PrinterStatus = { ...moonraker.OFFLINE, message: "Connecting to the printer…" };
-  let closed = false;
-  let poll: NodeJS.Timeout | null = null;
-  /** Ask the printer in use how it is; an answer from one switched away from meanwhile is dropped. */
-  const pollPrinter = async () => {
-    const asked = K2_HOST;
-    const s = await moonraker.getStatus();
-    if (asked !== K2_HOST) return;
-    status = s;
-    publish("status", status);
-    printers.onStatus(status, printerChanged); // follows the printer to a new address
-  };
-  const pollStatus = async () => {
-    await pollPrinter();
-    if (!closed) poll = setTimeout(pollStatus, 2000);
-  };
-  const printerView = () => ({ host: K2_HOST, camera: CAMERA_URL, nozzle: getNozzle(), printers: printers.list() });
-  /** Another printer in use, or this one at a new address: show it, its queue and its slices at once. */
-  const printerChanged = () => {
-    printers.reset();
-    publish("printer", printerView());
-    publish("queue", getQueue());
-    publish("models", null); // each printer has its own nozzle, so its own slices
-    void pollPrinter();
-  };
-  void pollStatus();
-  app.addHook("onClose", async () => { closed = true; if (poll) clearTimeout(poll); stopSlices(); });
+  // Listen right away; a printer may be off or its name slow to resolve.
+  printers.sync();
+  app.addHook("onClose", async () => { printers.stop(); stopSlices(); });
 
   // Files change outside the app too (CLI slices, nurb exports, hand edits):
   // tell browsers to refresh models when they do, coalescing bursts.
@@ -95,44 +69,30 @@ export async function start(opts: StartOptions = {}) {
     reply.status(err.statusCode ?? 500).send({ error: err.message });
   });
 
-  // ---- printer ----
-  app.get("/api/printer", async () => printerView());
-  // switching between saved printers works from anywhere; adding one is in Settings, on this computer
-  app.put<{ Body: { host?: string } }>("/api/printer/active", async (req) => {
-    printers.use(req.body?.host ?? "");
-    printerChanged();
-    return printerView();
-  });
-  app.put<{ Body: { nozzle?: string } }>("/api/printer/nozzle", async (req, reply) => {
+  // ---- printers ----
+  /** Slices are per nozzle: the nozzle on the printer a request is for (by id; the stock one when none, or it's gone). */
+  const nozzleFor = (id: string | undefined): Nozzle => getNozzle(id && printers.view().some((p) => p.id === id) ? id : null);
+  app.get("/api/printers", async () => printers.view());
+  // each printer has its own nozzle; the printer doesn't report a swap, so it's set here
+  app.put<{ Params: { id: string }; Body: { nozzle?: string } }>("/api/printers/:id/nozzle", async (req, reply) => {
     const nozzle = req.body?.nozzle;
     if (!isNozzle(nozzle)) return reply.status(400).send({ error: `Unknown nozzle "${nozzle}"` });
-    setNozzle(nozzle);
-    publish("printer", printerView());
-    publish("models", null); // every job's slice and stats are for the nozzle now set
+    setNozzle(printers.printer(req.params.id).id, nozzle);
+    publish("printers", printers.view());
+    publish("models", null); // its slices and stats are for the nozzle now set
     return { nozzle };
   });
-  app.get("/api/status", async () => status);
-  /** A browser acts on the printer it shows; if another is in use now (switched in another tab), it has to look again. */
-  const showing = (printer: string | undefined) => {
-    if (printer !== undefined && printer !== PRINTER_LABEL)
-      throw Object.assign(new Error(`Print Bay is using ${PRINTER_LABEL ?? "no printer"} now, not ${printer}. Check the Printer tab and try again.`), { statusCode: 409 });
-  };
   for (const action of ["pause", "resume", "cancel"] as const) {
-    app.post<{ Body: { printer?: string } }>(`/api/printer/${action}`, async (req) => {
-      showing(req.body?.printer);
-      const asked = PRINTER_LABEL ?? undefined;
-      const now = await moonraker.getStatus(); // still there, and still the same printer
-      showing(asked); // not switched meanwhile
-      if (!now.online) throw Object.assign(new Error(now.message || `Can't reach ${PRINTER_LABEL}`), { statusCode: 503 });
-      await moonraker[action]();
+    app.post<{ Params: { id: string } }>(`/api/printers/:id/${action}`, async (req) => {
+      await moonraker[action](printers.printer(req.params.id).host);
       return { ok: true };
     });
   }
 
   // ---- models and jobs ----
   app.get("/api/rates", async () => rates());
-  app.get("/api/models", async () =>
-    listModels().map((m) => ({ ...m, jobs: m.jobs.map((j) => ({ ...j, slicing: isSlicing(j.name) })) })));
+  app.get<{ Querystring: { printer?: string } }>("/api/models", async (req) =>
+    listModels(nozzleFor(req.query.printer)).map((m) => ({ ...m, jobs: m.jobs.map((j) => ({ ...j, slicing: isSlicing(j.name) })) })));
   app.get<{ Params: { id: string }; Querystring: { job?: string } }>("/api/models/:id/mesh", async (req, reply) => {
     const file = await meshFor(req.params.id, { job: req.query.job });
     return reply.type("model/stl").header("Cache-Control", "no-store").send(fs.createReadStream(file));
@@ -142,8 +102,11 @@ export async function start(opts: StartOptions = {}) {
     return reply.type("model/stl").header("Cache-Control", "no-store").send(fs.createReadStream(file));
   });
   app.get<{ Params: { id: string }; Querystring: { job?: string } }>("/api/models/:id/checks", async (req) => checkModel(req.params.id, req.query.job));
-  app.get<{ Params: { job: string } }>("/api/jobs/:job/toolpaths", async (req, reply) => {
-    const body = toolpathsFor(getJob(req.params.job).name);
+  app.get<{ Params: { job: string }; Querystring: { perPlate?: string; material?: string; oneColor?: string; printer?: string } }>("/api/jobs/:job/toolpaths", async (req, reply) => {
+    const { perPlate, material = "pla", oneColor } = req.query;
+    if (!isMaterial(material)) return reply.status(400).send({ error: `Unknown material "${material}"` });
+    const n = Math.max(1, Math.min(400, Math.floor(Number(perPlate ?? 1)) || 1));
+    const body = toolpathsFor(getJob(req.params.job).name, n, material, oneColor === "1", nozzleFor(req.query.printer));
     if (!body) return reply.status(404).send({ error: "Not sliced yet" });
     return reply.type("application/octet-stream").send(body);
   });
@@ -154,12 +117,12 @@ export async function start(opts: StartOptions = {}) {
     publish("models", null);
     return scadParams(getJob(job.name));
   });
-  app.post<{ Params: { job: string }; Body: { perPlate?: number; material?: string; oneColor?: boolean } | undefined }>("/api/jobs/:job/slice", async (req, reply) => {
+  app.post<{ Params: { job: string }; Body: { perPlate?: number; material?: string; oneColor?: boolean; printer?: string } | undefined }>("/api/jobs/:job/slice", async (req, reply) => {
     const job = getJob(req.params.job);
     const material = req.body?.material ?? "pla";
     if (!isMaterial(material)) return reply.status(400).send({ error: `Unknown material "${material}"` });
     if (job.plate && (req.body?.perPlate ?? 1) > 1) return reply.status(400).send({ error: "A plate is laid out already; print more of it as copies" });
-    slice(job.name, Math.max(1, Math.floor(req.body?.perPlate ?? 1)), material, !!req.body?.oneColor && job.parts.length > 1).catch(() => {}); // progress and failure arrive over SSE
+    slice(job.name, Math.max(1, Math.floor(req.body?.perPlate ?? 1)), material, !!req.body?.oneColor && job.parts.length > 1, nozzleFor(req.body?.printer)).catch(() => {}); // progress and failure arrive over SSE
     return reply.status(202).send({ ok: true });
   });
 
@@ -207,15 +170,10 @@ export async function start(opts: StartOptions = {}) {
   });
 
   // ---- printing ----
-  app.post<{ Body: Parameters<typeof print>[0] & { printer?: string } }>("/api/print", async (req) => {
-    showing(req.body?.printer);
-    return print(req.body);
-  });
+  app.post<{ Body: Parameters<typeof print>[0] }>("/api/print", async (req) =>
+    print(req.body));
   app.get("/api/queue", async () => getQueue());
-  app.post<{ Body: { printer?: string } }>("/api/queue/next", async (req) => {
-    showing(req.body?.printer);
-    return startNext();
-  });
+  app.post<{ Params: { id: string } }>("/api/printers/:id/queue/next", async (req) => startNext(req.params.id));
   app.delete<{ Params: { id: string } }>("/api/queue/:id", async (req) => {
     removeEntry(req.params.id);
     return getQueue();
@@ -250,11 +208,34 @@ export async function start(opts: StartOptions = {}) {
   app.get("/api/settings", async () => ({ ...settings.view(), desktop }));
   app.put<{ Body: settings.SettingsUpdate }>("/api/settings", async (req) => {
     if (!local(req.ip)) throw localOnly("Change settings");
-    const v = { ...(await settings.update(req.body ?? {})), desktop };
-    if (req.body?.printer || req.body?.forgetPrinter) printerChanged(); // a new printer shows at once
-    return v;
+    return { ...settings.update(req.body ?? {}), desktop };
   });
-  app.post("/api/settings/scan-printers", async () => moonraker.scanForPrinters());
+  // a changed printer shows at once: its polling restarts at the new address
+  app.post<{ Body: settings.PrinterInput }>("/api/settings/printers", async (req) => {
+    if (!local(req.ip)) throw localOnly("Add a printer");
+    const p = settings.addPrinter(req.body ?? {});
+    printers.sync();
+    return p;
+  });
+  app.put<{ Params: { id: string }; Body: settings.PrinterInput }>("/api/settings/printers/:id", async (req) => {
+    if (!local(req.ip)) throw localOnly("Change a printer");
+    const p = settings.updatePrinter(req.params.id, req.body ?? {});
+    printers.sync();
+    return p;
+  });
+  app.delete<{ Params: { id: string } }>("/api/settings/printers/:id", async (req) => {
+    if (!local(req.ip)) throw localOnly("Remove a printer");
+    settings.removePrinter(req.params.id);
+    forgetPrinter(req.params.id);
+    printers.sync();
+    return { ok: true };
+  });
+  app.post("/api/settings/scan-printers", async () => {
+    const found = await moonraker.scanForPrinters();
+    const moved = settings.applyScan(found);
+    if (moved.length) printers.sync(); // poll them at their new addresses
+    return { found, moved };
+  });
   app.post<{ Body: { host: string } }>("/api/settings/test-printer", async (req) => {
     const host = normalizeHost(req.body?.host ?? "");
     return { host, ...(await moonraker.probe(host)) };
@@ -317,9 +298,8 @@ export async function start(opts: StartOptions = {}) {
     const res = reply.raw;
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
     const send = (e: { type: string; data: unknown }) => res.write(`event: ${e.type}\ndata: ${JSON.stringify(e.data)}\n\n`);
-    send({ type: "status", data: status });
+    send({ type: "printers", data: printers.view() });
     send({ type: "queue", data: getQueue() });
-    send({ type: "printer", data: printerView() });
     send({ type: "update", data: opts.updates?.status() ?? null });
     bus.on("event", send);
     const ping = setInterval(() => res.write(": ping\n\n"), 25_000);

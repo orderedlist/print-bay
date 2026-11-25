@@ -50,20 +50,59 @@ export const WEB_DIST = path.join(APP_ROOT, "app/web/dist");
 export const PORT = Number(process.env.PORT ?? 8765);
 export const HOST = process.env.BIND ?? "0.0.0.0"; // LAN, so a phone can use it
 
-// ---- settings for this computer: the printer and where the tools are ----
+// ---- settings for this computer: its printers and where the tools are ----
 // Kept in the library as settings.json, which git never commits (see repos.ts): another
-// computer sharing the library has its own printer address and tool paths.
+// computer sharing the library has its own printers and tool paths.
 
 export const SETTINGS_FILE = path.join(DATA, "settings.json");
 export type ToolName = "orca" | "openscad" | "claude" | "git" | "nurb";
 /**
- * A printer this computer has used. `name` is what the printer calls itself (Moonraker's
- * hostname, e.g. K2-360F): it stays put when the router hands the printer a new address,
- * so it's how the printer is found again (printers.ts).
+ * A printer this computer prints to. `name` is what you call it; `mac` (its Wi-Fi card) and
+ * `hostname` (what it calls itself, K2-360F) don't change when the router hands it a new address:
+ * they find the printer again when it moves (printers.ts).
  */
-export interface SavedPrinter { host: string; name?: string }
-/** `printer` is the address of the one in use; `printers` every one saved, that one included. */
-export interface Settings { printer?: string; printers?: SavedPrinter[]; tools?: Partial<Record<ToolName, string>>; setupDone?: boolean }
+export interface PrinterConfig { id: string; name: string; host: string; hostname?: string; mac?: string }
+
+/**
+ * A printer as settings.json keeps it. `name` is what the printer calls itself, as Print Bay 0.3
+ * saved it (0.3 uses one printer at a time: `printer`, the address of the one in use); `label`,
+ * `id` and `mac` came after. Kept this way so 0.3 sharing the library still reads it.
+ */
+export interface SavedPrinter { host: string; name?: string; id?: string; label?: string; mac?: string; hostname?: string }
+export interface Settings {
+  printers?: SavedPrinter[];
+  printer?: string; // 0.3: the one in use; before that, the only one
+  tools?: Partial<Record<ToolName, string>>;
+  setupDone?: boolean;
+}
+
+const bareHost = (host: string) => host.replace(/:7125$/, "");
+
+/**
+ * The saved printers as the app uses them. A printer from 0.3 has no id or label: its id is what
+ * 0.3 kept its queue and nozzle under (its name, else its address), and it's called by its name.
+ */
+export function savedPrinters(s: Settings): PrinterConfig[] {
+  const list = [...(s.printers ?? [])];
+  if (s.printer && !list.some((p) => p.host === s.printer)) list.unshift({ host: s.printer });
+  return list.map((p) => {
+    // saved by a development build between 0.3 and this: `name` was the label, `hostname` the printer's own name
+    const dev = p.id !== undefined && p.label === undefined;
+    const hostname = dev ? p.hostname : p.name;
+    const c: PrinterConfig = { id: p.id ?? p.name ?? p.host, name: (dev ? p.name : p.label) ?? hostname ?? bareHost(p.host), host: p.host };
+    if (hostname) c.hostname = hostname;
+    if (p.mac) c.mac = p.mac;
+    return c;
+  });
+}
+
+/** The printers as settings.json keeps them, readable by 0.3 (which uses `printer`, here the first). */
+export function toSaved(list: PrinterConfig[]): Pick<Settings, "printer" | "printers"> {
+  return {
+    printer: list[0]?.host,
+    printers: list.map((p) => ({ id: p.id, host: p.host, label: p.name, ...(p.hostname ? { name: p.hostname } : {}), ...(p.mac ? { mac: p.mac } : {}) })),
+  };
+}
 
 export function readSettings(): Settings {
   try { return JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8")) as Settings; } catch { return {}; }
@@ -74,23 +113,14 @@ export function writeSettings(next: Settings): void {
   applySettings();
 }
 
-/** The saved printers; settings from before there could be several have only the one address. */
-export function savedPrinters(s: Settings): SavedPrinter[] {
-  const list = (s.printers ?? []).map((p) => ({ ...p }));
-  if (s.printer && !list.some((p) => p.host === s.printer)) list.unshift({ host: s.printer });
-  return list;
-}
-
 /** A checkout that is its own library predates settings: it keeps the printer it always used. */
 const LEGACY_PRINTER = DATA === path.resolve(APP_ROOT) ? "192.168.4.42:7125" : null;
-
-export const MOONRAKER_PORT = 7125;
 
 /** "192.168.4.42" or "k2-360f.local:7125" (Moonraker's port is 7125 unless given). */
 export function normalizeHost(input: string): string {
   const h = input.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
   if (!/^[A-Za-z0-9.-]+(:\d{1,5})?$/.test(h)) throw Object.assign(new Error("Use the printer's IP address or host name, like 192.168.1.50"), { statusCode: 400 });
-  return h.includes(":") ? h : `${h}:${MOONRAKER_PORT}`;
+  return h.includes(":") ? h : `${h}:7125`;
 }
 
 const HOME = os.homedir();
@@ -126,42 +156,30 @@ export function resolveTool(name: ToolName, settings = readSettings()): { path: 
   return { path: fallback, source: "missing" };
 }
 
-export function resolvePrinter(settings = readSettings()): { host: string | null; source: Source } {
-  if (ENV0.K2_HOST) return { host: ENV0.K2_HOST, source: "env" };
-  if (settings.printer) return { host: settings.printer, source: "settings" };
-  // no guess for anyone else: Setup scans the network for the printer
-  return { host: LEGACY_PRINTER, source: LEGACY_PRINTER ? "default" : "missing" };
+/** The printers and why: K2_HOST in the environment (one printer), settings.json, or the address a checkout always used. */
+export function resolvePrinters(settings = readSettings()): { printers: PrinterConfig[]; source: Source } {
+  const one = (host: string): PrinterConfig[] => [{ id: host, name: "K2", host }];
+  if (ENV0.K2_HOST) return { printers: one(ENV0.K2_HOST), source: "env" };
+  if (settings.printers || settings.printer) return { printers: savedPrinters(settings), source: "settings" };
+  // no guess for anyone else: Setup scans the network for printers
+  return { printers: LEGACY_PRINTER ? one(LEGACY_PRINTER) : [], source: LEGACY_PRINTER ? "default" : "missing" };
 }
 
+/** The K2's camera, a WebRTC endpoint beside Moonraker. */
+export const cameraUrl = (host: string) => `http://${host.split(":")[0]}:8000/call/webrtc_local`;
+
 // Live bindings: modules that import these see new values after applySettings().
-export let K2_HOST: string | null = null;
-export let K2_NAME: string | null = null; // what the printer in use calls itself, once it has said
-/** The printer in use, as its queue and nozzle are kept: by name, or by address until it has one. */
-export let PRINTER_ID: string | null = null;
-/** The printer in use, for people: its name, or its address without Moonraker's port. */
-export let PRINTER_LABEL: string | null = null;
-export let MOONRAKER: string | null = null;
-export let CAMERA_URL: string | null = null;
+export let PRINTERS: PrinterConfig[] = [];
 export let ORCA = "";
 export let OPENSCAD = "";
 export let CLAUDE = "";
 export let GIT = "";
 export let NURB_PYTHON = "";
 
-export const sameName = (a: string | null | undefined, b: string) => !!a && a.toLowerCase() === b.toLowerCase();
-
-/** Whether something kept for a printer (a queued copy, a nozzle) is for the one in use: by name, or by the address it had before it was named. */
-export const isThisPrinter = (id: string | undefined) => !!id && (id === K2_NAME || id === K2_HOST);
-
 /** Read settings.json (and the environment) into the values above, and into the environment children get. */
 export function applySettings(): void {
   const s = readSettings();
-  K2_HOST = resolvePrinter(s).host;
-  K2_NAME = savedPrinters(s).find((p) => p.host === K2_HOST)?.name ?? null;
-  PRINTER_ID = K2_NAME ?? K2_HOST;
-  PRINTER_LABEL = K2_NAME ?? K2_HOST?.replace(`:${MOONRAKER_PORT}`, "") ?? null;
-  MOONRAKER = K2_HOST ? `http://${K2_HOST}` : null;
-  CAMERA_URL = K2_HOST ? `http://${K2_HOST.split(":")[0]}:8000/call/webrtc_local` : null;
+  PRINTERS = resolvePrinters(s).printers;
   ORCA = resolveTool("orca", s).path;
   OPENSCAD = resolveTool("openscad", s).path;
   CLAUDE = resolveTool("claude", s).path;
@@ -169,7 +187,8 @@ export function applySettings(): void {
   NURB_PYTHON = resolveTool("nurb", s).path;
   // nurb_part.py, and the terminal scripts if run from the app, read these
   Object.assign(process.env, { ORCA, OPENSCAD, NURB_PYTHON });
-  if (K2_HOST) process.env.K2_HOST = K2_HOST; else delete process.env.K2_HOST;
+  // the terminal scripts drive one printer: the first
+  if (PRINTERS[0]) process.env.K2_HOST = PRINTERS[0].host; else delete process.env.K2_HOST;
 }
 
 // ---- the library's starting contents ----
@@ -203,5 +222,16 @@ export const TOOL_BIN = (() => {
   return bin;
 })();
 
+/** Settings saved by a development build between 0.3 and this one: put them in the shape 0.3 reads too. */
+function upgradeSettings(): void {
+  const s = readSettings();
+  if (!s.printers?.some((p) => p.id !== undefined && p.label === undefined)) return;
+  const { printer } = s;
+  Object.assign(s, toSaved(savedPrinters(s)));
+  if (printer) s.printer = printer;
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(s, null, 2) + "\n");
+}
+
 seedLibrary();
+upgradeSettings();
 applySettings();

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api";
 
 // The K2 serves WebRTC on :8000. It only completes the handshake when the offer
 // asks for a two-way (sendrecv) video channel; a recvonly offer gets an answer
@@ -23,7 +22,8 @@ async function connect(pc: RTCPeerConnection, url: string) {
 
 type CamState = "connecting" | "live" | "failed" | "none"; // none: no printer set up
 
-export function Camera({ children, openSettings }: { children?: React.ReactNode; openSettings?: () => void }) {
+/** `camera`: the printer's WebRTC endpoint; null when there's no printer set up. */
+export function Camera({ camera, children, openSettings }: { camera: string | null; children?: React.ReactNode; openSettings?: () => void }) {
   const video = useRef<HTMLVideoElement>(null);
   const [state, setState] = useState<CamState>("connecting");
   const [attempt, setAttempt] = useState(0);
@@ -39,9 +39,8 @@ export function Camera({ children, openSettings }: { children?: React.ReactNode;
     const onPlaying = () => alive && setState("live");
     v?.addEventListener("playing", onPlaying);
     const timeout = setTimeout(() => alive && setState((s) => (s === "live" || s === "none" ? s : "failed")), 12_000);
-    api<{ camera: string | null }>("/api/printer")
-      .then(({ camera }) => (camera ? connect(pc, camera) : alive && setState("none")))
-      .catch(() => alive && setState("failed"));
+    if (!camera) setState("none");
+    else connect(pc, camera).catch(() => alive && setState("failed"));
     return () => {
       alive = false;
       clearTimeout(timeout);
@@ -49,7 +48,7 @@ export function Camera({ children, openSettings }: { children?: React.ReactNode;
       pc.close();
       if (v) v.srcObject = null;
     };
-  }, [attempt]);
+  }, [attempt, camera]);
 
   return (
     <div className="camera">
@@ -64,7 +63,7 @@ export function Camera({ children, openSettings }: { children?: React.ReactNode;
           ) : state === "none" ? (
             <>
               <div>No printer set up yet.</div>
-              {openSettings && <button className="cta cta-sm" onClick={openSettings}>Add your K2</button>}
+              {openSettings && <button className="cta cta-sm" onClick={openSettings}>Add a printer</button>}
             </>
           ) : (
             <>
