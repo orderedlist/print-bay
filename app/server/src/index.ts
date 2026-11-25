@@ -120,7 +120,9 @@ export async function start(opts: StartOptions = {}) {
   for (const action of ["pause", "resume", "cancel"] as const) {
     app.post<{ Body: { printer?: string } }>(`/api/printer/${action}`, async (req) => {
       showing(req.body?.printer);
+      const asked = PRINTER_LABEL ?? undefined;
       const now = await moonraker.getStatus(); // still there, and still the same printer
+      showing(asked); // not switched meanwhile
       if (!now.online) throw Object.assign(new Error(now.message || `Can't reach ${PRINTER_LABEL}`), { statusCode: 503 });
       await moonraker[action]();
       return { ok: true };

@@ -16,7 +16,9 @@ const fail = (message: string, statusCode = 400) => Object.assign(new Error(mess
 export function list(s = readSettings()): KnownPrinter[] {
   const { host, source } = resolvePrinter(s);
   if (source === "env") return [];
-  return savedPrinters(s).map((p) => ({ ...p, active: p.host === host }));
+  const printers = savedPrinters(s);
+  const inUse = printers.findIndex((p) => p.host === host); // the first at that address (see refind)
+  return printers.map((p, i) => ({ ...p, active: i === inUse }));
 }
 
 /** `printers` with `me` in the place of what's saved at its address or under its name (the same printer at an older address). */
@@ -103,16 +105,26 @@ async function refind(): Promise<boolean> {
   const saved = savedPrinters(s);
   // switched, renamed or sending while scanning: what was looked for isn't what's in use now
   if (resolvePrinter(s).host !== host || saved.find((p) => p.host === host)?.name !== me.name || printing.isSending()) return false;
-  const at = (p: SavedPrinter) => {
+  const { printers, seen } = following(saved, found);
+  if (seen.every((f, i) => !f || f.host === saved[i].host)) return false;
+  const moved = seen[saved.findIndex((p) => p.host === host)]?.host ?? host;
+  save(s, printers, moved);
+  saved.forEach((p, i) => named(p.host, seen[i]?.name));
+  return moved !== host;
+}
+
+/**
+ * The saved printers at the addresses a scan found them at, and where each was found (null: not found).
+ * One not found, at an address another was just found at, goes after it: the address is the other's now.
+ */
+export function following(saved: SavedPrinter[], found: { host: string; hostname: string }[]) {
+  const seen = saved.map((p): SavedPrinter | null => {
     const matches = p.name ? found.filter((f) => sameName(p.name, f.hostname)) : saved.length === 1 ? found : [];
-    return matches.length === 1 ? { host: matches[0].host, name: matches[0].hostname } : p; // two answering to one name: don't guess
-  };
-  const now = saved.map(at);
-  const moved = now[saved.indexOf(saved.find((p) => p.host === host)!)];
-  if (moved.host === host) return false;
-  save(s, now, moved.host);
-  saved.forEach((p, i) => named(p.host, now[i].name));
-  return true;
+    return matches.length === 1 ? { host: matches[0].host, name: p.name ?? matches[0].hostname } : null; // two answering to one name: don't guess
+  });
+  const now = saved.map((p, i) => seen[i] ?? p);
+  const stale = (p: SavedPrinter, i: number) => !seen[i] && seen.some((f) => f?.host === p.host);
+  return { printers: [...now.filter((p, i) => !stale(p, i)), ...now.filter(stale)], seen };
 }
 
 // Scan soon after the printer stops answering (a reboot takes about a minute), then less and

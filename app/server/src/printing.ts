@@ -39,9 +39,15 @@ const QUEUE_FILE = path.join(CACHE, "queue.json");
 const state: { running: QueueEntry[]; entries: QueueEntry[] } = (() => {
   if (!fs.existsSync(QUEUE_FILE)) return { running: [], entries: [] };
   const file = JSON.parse(fs.readFileSync(QUEUE_FILE, "utf8"));
-  const mine = (e: QueueEntry): QueueEntry => (e.printer || !PRINTER_ID ? e : { ...e, printer: PRINTER_ID });
+  let tagged = false;
+  const mine = (e: QueueEntry): QueueEntry => {
+    if (e.printer || !PRINTER_ID) return e;
+    tagged = true;
+    return { ...e, printer: PRINTER_ID };
+  };
   const state = { running: (file.running ?? (file.active ? [file.active] : [])).map(mine), entries: (file.entries ?? []).map(mine) };
-  if (!file.running) fs.writeFileSync(QUEUE_FILE, JSON.stringify(state, null, 2)); // kept for that printer, whichever is in use next time
+  try { if (tagged) fs.writeFileSync(QUEUE_FILE, JSON.stringify(state, null, 2)); } // kept for that printer, whichever is in use next time
+  catch (e) { console.warn(`Couldn't save which printer the queued copies are for: ${(e as Error).message}`); }
   return state;
 })();
 
