@@ -31,7 +31,7 @@ export function startUpdater() {
     asked = false;
   });
   autoUpdater.on("error", (err) => {
-    if (asked) show({ type: "warning", message: "Couldn't check for updates", detail: err.message });
+    if (asked) show({ type: "warning", message: "Couldn't check for updates", detail: err.message.split("\n")[0].slice(0, 300) });
     asked = false;
   });
   autoUpdater.on("update-downloaded", ({ version }) => {

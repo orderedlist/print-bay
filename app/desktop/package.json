@@ -10,8 +10,7 @@
     "start": "electron .",
     "bundle": "node bundle.mjs",
     "dist": "node bundle.mjs && electron-builder --mac --publish never",
-    "dist:notarize": "node bundle.mjs && electron-builder --mac --publish never -c.mac.notarize=true",
-    "release": "node bundle.mjs && electron-builder --mac --publish always -c.mac.notarize=true"
+    "dist:notarize": "node bundle.mjs && electron-builder --mac --publish never -c.mac.notarize=true"
   },
   "build": {
     "appId": "com.boxoutdesigns.printbay",
