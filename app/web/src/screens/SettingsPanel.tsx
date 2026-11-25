@@ -39,7 +39,7 @@ export function SettingsPanel({ settings, setSettings, setup, update, toast }: P
         </div>
       )}
       {update && !setup && <UpdateSection update={update} toast={toast} />}
-      <PrinterSection settings={settings} save={save} toast={toast} />
+      <PrinterSection settings={settings} setSettings={setSettings} save={save} toast={toast} />
       <LibrarySection settings={settings} setup={setup} toast={toast} setSettings={setSettings} save={save} />
       <div className="sec">
         <div className="sech">Programs<span className="count">{settings.tools.filter((t) => t.ok).length}/{settings.tools.length}</span></div>
@@ -64,7 +64,7 @@ export function SettingsPanel({ settings, setSettings, setup, update, toast }: P
 
 interface FoundPrinter { host: string; ip: string; hostname: string; state: string; k2: boolean }
 
-function PrinterSection({ settings, save, toast }: { settings: SettingsView; save: (b: object, done?: string) => Promise<boolean>; toast: Props["toast"] }) {
+function PrinterSection({ settings, setSettings, save, toast }: Pick<Props, "settings" | "setSettings" | "toast"> & { save: (b: object, done?: string) => Promise<boolean> }) {
   const saved = settings.printer.saved;
   const [host, setHost] = useState(saved.length ? "" : shortHost(settings.printer.host ?? ""));
   const [busy, setBusy] = useState(false);
@@ -84,7 +84,15 @@ function PrinterSection({ settings, save, toast }: { settings: SettingsView; sav
   // no printer yet: look for one straight away
   useEffect(() => { if (!settings.printer.host && !fromEnv) void scan(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const use = (p: { host: string }, name: string) => save({ printer: p.host }, `Using ${name}.`);
+  // a saved printer is only switched to (it may be off: what's known about it stays); one found on the network is saved
+  const use = async (p: SavedPrinter) => {
+    try {
+      await api("/api/printer/active", { method: "PUT", json: { host: p.host } });
+      setSettings(await api<SettingsView>("/api/settings"));
+      toast(`Using ${printerName(p)}.`);
+    } catch (e) { toast((e as Error).message, true); }
+  };
+  const add = (f: FoundPrinter) => save({ printer: f.host }, `Using ${f.hostname}.`);
   const forget = (p: SavedPrinter) => save({ forgetPrinter: p.host }, `Forgot ${printerName(p)}.`);
   const test = async () => {
     setBusy(true);
@@ -131,7 +139,7 @@ function PrinterSection({ settings, save, toast }: { settings: SettingsView; sav
                   </span>
                   {p.active
                     ? <span style={{ fontSize: 12, color: "var(--ok)", flex: "none" }}>In use</span>
-                    : <button className="link-btn" style={{ fontSize: 12, flex: "none" }} aria-label={`Use ${printerName(p)}`} onClick={() => use(p, printerName(p))}>Use</button>}
+                    : <button className="link-btn" style={{ fontSize: 12, flex: "none" }} aria-label={`Use ${printerName(p)}`} onClick={() => use(p)}>Use</button>}
                   <button className="ibtn" aria-label={`Forget ${printerName(p)}`} title="Forget" onClick={() => forget(p)}>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
                   </button>
@@ -144,7 +152,7 @@ function PrinterSection({ settings, save, toast }: { settings: SettingsView; sav
             <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 10 }}>
               {saved.length > 0 && <div className="faint" style={{ fontSize: 12, marginBottom: 4 }}>Also on your network</div>}
               {unsaved.map((f) => (
-                <button key={f.host} className="row" onClick={() => use(f, f.hostname)} title={`Use ${f.hostname}`}>
+                <button key={f.host} className="row" onClick={() => add(f)} title={`Use ${f.hostname}`}>
                   <span className="row-text">
                     <span className="row-title">{f.hostname}{f.k2 ? "" : " (not a K2?)"}</span>
                     <span className="row-sub">{f.ip} · {f.state}</span>

@@ -261,10 +261,14 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
     setSending(true);
     try {
       const r = await api<{ started: boolean; queued: number }>("/api/print", {
-        method: "POST", json: multi
-          ? { job: job.name, colors: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.color])),
-            slots: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.slot])), copies, perPlate, material, startNow }
-          : { job: job.name, color: chosen.color, slot: chosen.slot, copies, perPlate, material, startNow },
+        method: "POST", json: {
+          ...(multi
+            ? { colors: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.color])),
+              slots: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.slot])) }
+            : { color: chosen.color, slot: chosen.slot }),
+          job: job.name, copies, perPlate, material, startNow,
+          printer: status?.printer ?? undefined, // the server refuses if another printer is in use by now
+        },
       });
       const what = `${title(model.id)}${job.label ? ` (${job.label})` : ""} in ${colorsText}`;
       toast(r.started

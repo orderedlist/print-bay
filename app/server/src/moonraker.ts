@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { MOONRAKER, MOONRAKER_PORT, PRINTER_LABEL } from "./config.js";
+import { K2_HOST, K2_NAME, MOONRAKER, MOONRAKER_PORT, PRINTER_LABEL, sameName } from "./config.js";
 import type { Material } from "./jobs.js";
 
 /** Creality filament ids (Orca's filament_id; the CFS reports them as material_type) that aren't plain PLA. */
@@ -22,6 +22,7 @@ export interface Slot {
 
 export interface PrinterStatus {
   printer: string | null; // the one in use: its name, or its address until it has answered
+  hostname: string | null; // what the printer answering calls itself
   online: boolean;
   state: string; // standby | printing | paused | complete | cancelled | error | offline
   filename: string;
@@ -72,7 +73,7 @@ function slotsFrom(box: any, rack: any): Slot[] {
 }
 
 export const OFFLINE: PrinterStatus = {
-  printer: null, online: false, state: "offline", filename: "", progress: 0, printSeconds: 0, etaSeconds: null,
+  printer: null, hostname: null, online: false, state: "offline", filename: "", progress: 0, printSeconds: 0, etaSeconds: null,
   layer: { current: null, total: null }, nozzle: { temp: 0, target: 0 }, bed: { temp: 0, target: 0 },
   slots: [], message: "",
 };
@@ -80,17 +81,24 @@ export const OFFLINE: PrinterStatus = {
 export async function getStatus(): Promise<PrinterStatus> {
   const printer = PRINTER_LABEL;
   let s: any;
+  let hostname: string;
   try {
     const q = "print_stats&extruder&heater_bed&display_status&virtual_sdcard&box&filament_rack";
-    s = ((await api("GET", `/printer/objects/query?${q}`, {}, 5000)) as any).status;
+    const [info, query] = await Promise.all([api("GET", "/printer/info", {}, 5000), api("GET", `/printer/objects/query?${q}`, {}, 5000)]);
+    hostname = String((info as any).hostname ?? "");
+    s = (query as any).status;
   } catch (e) {
     return { ...OFFLINE, printer, message: (e as Error).message };
   }
+  // another printer took its address (two printers that swapped after a power cut, say): not this one
+  if (K2_NAME && hostname && !sameName(hostname, K2_NAME))
+    return { ...OFFLINE, printer, hostname, message: `${K2_HOST} is ${hostname} now. Looking for ${K2_NAME}…` };
   const ps = s.print_stats ?? {};
   const progress = s.display_status?.progress || s.virtual_sdcard?.progress || 0;
   const elapsed = Math.round(ps.print_duration ?? 0);
   return {
     printer,
+    hostname: hostname || null,
     online: true,
     state: ps.state ?? "standby",
     filename: ps.filename ?? "",

@@ -148,6 +148,8 @@ export let CLAUDE = "";
 export let GIT = "";
 export let NURB_PYTHON = "";
 
+export const sameName = (a: string | null | undefined, b: string) => !!a && a.toLowerCase() === b.toLowerCase();
+
 /** Whether something kept for a printer (a queued copy, a nozzle) is for the one in use: by name, or by the address it had before it was named. */
 export const isThisPrinter = (id: string | undefined) => !!id && (id === K2_NAME || id === K2_HOST);
 

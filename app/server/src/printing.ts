@@ -26,23 +26,24 @@ export interface QueueEntry {
   filename: string; // already uploaded to the printer
   copy: number;
   of: number;
-  printer?: string; // uploaded to: its name, or its address until it had one (none: queued before there could be several)
+  printer?: string; // uploaded to: its name, or its address until it had one
 }
 
 interface QueueState { active: QueueEntry | null; entries: QueueEntry[] }
 
 // Each printer has its own queue: a copy is uploaded to one printer and can only start there.
 // Every printer's copies are kept in one list, tagged with the printer; `running` holds the
-// copy each printer last started. A file from before there could be several holds `active`.
+// copy each printer last started. A file from before there could be several holds `active`,
+// and copies with no printer: they were all for the printer in use.
 const QUEUE_FILE = path.join(CACHE, "queue.json");
 const state: { running: QueueEntry[]; entries: QueueEntry[] } = (() => {
   if (!fs.existsSync(QUEUE_FILE)) return { running: [], entries: [] };
   const file = JSON.parse(fs.readFileSync(QUEUE_FILE, "utf8"));
-  return { running: file.running ?? (file.active ? [file.active] : []), entries: file.entries ?? [] };
+  const mine = (e: QueueEntry): QueueEntry => (e.printer || !PRINTER_ID ? e : { ...e, printer: PRINTER_ID });
+  return { running: (file.running ?? (file.active ? [file.active] : [])).map(mine), entries: (file.entries ?? []).map(mine) };
 })();
 
-/** Queued before there could be several printers: the one in use. */
-const forThisPrinter = (e: QueueEntry) => !e.printer || isThisPrinter(e.printer);
+const forThisPrinter = (e: QueueEntry) => isThisPrinter(e.printer);
 
 /** The queue of the printer in use. */
 export const getQueue = (): QueueState => ({
@@ -56,6 +57,21 @@ function save() {
 }
 
 const fail = (message: string, statusCode = 400) => Object.assign(new Error(message), { statusCode });
+
+/** A printer kept by its address is now kept by its name: so are its copies. */
+export function rekey(from: string, to: string) {
+  const moved = [...state.running, ...state.entries].filter((e) => e.printer === from);
+  for (const e of moved) e.printer = to;
+  if (moved.length) save();
+}
+
+// Prints being sliced and sent: the printer in use can't change under one (see printers.ts).
+let sending = 0;
+export const isSending = () => sending > 0;
+async function whileSending<T>(work: () => Promise<T>): Promise<T> {
+  sending++;
+  try { return await work(); } finally { sending--; }
+}
 
 function rgb(hex: string) {
   const h = hex.replace("#", "");
@@ -107,11 +123,15 @@ async function startEntry(entry: QueueEntry) {
  * multi-colour job its spool (by part name), defaulting to the job's own colours.
  * `material` slices for that filament; left out, it's what the printer has a picked spool set as (wood, silk; stone has no Creality id, so it's picked), else PLA.
  */
-export async function print(opts: {
+export const print = (opts: PrintOptions) => whileSending(() => send(opts));
+
+type PrintOptions = {
   job: string; color?: string; colors?: Record<string, string>;
   slot?: string; slots?: Record<string, string>; // the spools picked (T1A, EXT): exact where two hold the same colour
   copies: number; perPlate?: number; material?: string; startNow: boolean;
-}) {
+};
+
+async function send(opts: PrintOptions) {
   const job = getJob(opts.job);
   const copies = Math.max(1, Math.min(20, Math.floor(opts.copies))); // plates, one after another
   const perPlate = Math.max(1, Math.min(400, Math.floor(opts.perPlate ?? 1)));
@@ -159,7 +179,7 @@ export async function print(opts: {
 }
 
 /** Start the next queued copy once someone confirms the bed is clear. */
-export async function startNext() {
+export const startNext = () => whileSending(async () => {
   const next = state.entries.find(forThisPrinter);
   if (!next) throw fail("The queue is empty", 409);
   const status = await moonraker.getStatus();
@@ -168,7 +188,7 @@ export async function startNext() {
   state.entries = state.entries.filter((e) => e !== next);
   save();
   return next;
-}
+});
 
 export function removeEntry(id: string) {
   state.entries = state.entries.filter((e) => e.id !== id);

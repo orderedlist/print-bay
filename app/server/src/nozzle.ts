@@ -30,8 +30,18 @@ export function getNozzle(): Nozzle {
   return isNozzle(n) ? n : STOCK;
 }
 
+const write = () => fs.writeFileSync(FILE, JSON.stringify({ printers: saved }, null, 2));
+
 export function setNozzle(n: Nozzle) {
   if (!PRINTER_ID) throw Object.assign(new Error("Set up a printer first, in Settings."), { statusCode: 409 });
   saved = { ...Object.fromEntries(Object.entries(saved).filter(([id]) => !isThisPrinter(id))), [PRINTER_ID]: n };
-  fs.writeFileSync(FILE, JSON.stringify({ printers: saved }, null, 2));
+  write();
+}
+
+/** A printer kept by its address is now kept by its name: so is its nozzle (one already set by name stays). */
+export function rekey(from: string, to: string) {
+  if (!(from in saved)) return;
+  const { [from]: n, ...rest } = saved;
+  saved = { [to]: n, ...rest };
+  write();
 }

@@ -42,7 +42,9 @@ export function PrinterPanel({ live, models, toast, openModel }: Props) {
   const { status, queue } = live;
   const nozzle = live.printer?.nozzle ?? null; // mm; set here, since the printer doesn't report a swap
   const printers = live.printer?.printers ?? [];
-  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState<string | null>(null); // the printer it was asked for
+  const shown = status?.printer ?? undefined; // the server refuses if another printer is in use by now
+  const post = (path: string, printer = shown) => api(path, { method: "POST", json: { printer } });
   const [busy, setBusy] = useState(false);
 
   const act = async (fn: () => Promise<unknown>, done?: string) => {
@@ -98,9 +100,9 @@ export function PrinterPanel({ live, models, toast, openModel }: Props) {
         {running && (
           <div className="grid2" style={{ marginTop: 12 }}>
             {state === "paused"
-              ? <button className="cta cta-md" disabled={busy} onClick={() => act(() => api("/api/printer/resume", { method: "POST" }), "Resuming.")}>Resume</button>
-              : <button className="cta cta-md" disabled={busy} onClick={() => act(() => api("/api/printer/pause", { method: "POST" }), "Pausing.")}>Pause</button>}
-            <button className="cta cta-md danger" disabled={busy} onClick={() => setConfirmCancel(true)}>Cancel</button>
+              ? <button className="cta cta-md" disabled={busy} onClick={() => act(() => post("/api/printer/resume"), "Resuming.")}>Resume</button>
+              : <button className="cta cta-md" disabled={busy} onClick={() => act(() => post("/api/printer/pause"), "Pausing.")}>Pause</button>}
+            <button className="cta cta-md danger" disabled={busy} onClick={() => setConfirmCancel(printerOf(status))}>Cancel</button>
           </div>
         )}
       </div>
@@ -162,7 +164,7 @@ export function PrinterPanel({ live, models, toast, openModel }: Props) {
             })}
             <button className="cta cta-md go" style={{ marginTop: 8 }} disabled={!idle || busy || !next}
               title={idle ? "" : "Waiting for the current print to finish"}
-              onClick={() => act(() => api("/api/queue/next", { method: "POST" }), `Starting ${title(next.job)}.`)}>
+              onClick={() => act(() => post("/api/queue/next"), `Starting ${title(next.job)}.`)}>
               {idle ? "Bed is clear, start next" : "Starts after this print"}
             </button>
           </div>
@@ -170,15 +172,15 @@ export function PrinterPanel({ live, models, toast, openModel }: Props) {
       </div>
 
       {confirmCancel && (
-        <div className="scrim" onClick={() => setConfirmCancel(false)}>
+        <div className="scrim" onClick={() => setConfirmCancel(null)}>
           <div className="panel dialog" role="dialog" aria-modal="true" aria-labelledby="cancel-print" onClick={(e) => e.stopPropagation()}>
-            <h2 id="cancel-print">Cancel this print?</h2>
+            <h2 id="cancel-print">Cancel this print on {confirmCancel}?</h2>
             <div className="muted">The printer stops and the part is lost. This can't be undone.</div>
             <div className="grid2">
-              <button className="cta cta-md" autoFocus onClick={() => setConfirmCancel(false)}>Keep printing</button>
+              <button className="cta cta-md" autoFocus onClick={() => setConfirmCancel(null)}>Keep printing</button>
               <button className="cta cta-md danger" disabled={busy} onClick={async () => {
-                setConfirmCancel(false);
-                await act(() => api("/api/printer/cancel", { method: "POST" }), "Print cancelled. Clear the bed before the next one.");
+                setConfirmCancel(null);
+                await act(() => post("/api/printer/cancel", confirmCancel), "Print cancelled. Clear the bed before the next one.");
               }}>Cancel print</button>
             </div>
           </div>

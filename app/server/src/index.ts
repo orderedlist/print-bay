@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
-import { CAMERA_URL, DATA, HOST, K2_HOST, normalizeHost, PORT, WEB_DIST } from "./config.js";
+import { CAMERA_URL, DATA, HOST, K2_HOST, normalizeHost, PORT, PRINTER_LABEL, WEB_DIST } from "./config.js";
 import { bus, publish } from "./events.js";
 import { getJob, getModel, isMaterial, listJobs, listModels, rates, scadParams, setScadParams, writePlate } from "./jobs.js";
 import { meshFor } from "./mesh.js";
@@ -56,7 +56,7 @@ export async function start(opts: StartOptions = {}) {
   const pollStatus = async () => {
     status = await moonraker.getStatus();
     publish("status", status);
-    printers.onStatus(status.online, printerChanged); // follows the printer to a new address
+    printers.onStatus(status, printerChanged); // follows the printer to a new address
     if (!closed) poll = setTimeout(pollStatus, 2000);
   };
   const printerView = () => ({ host: K2_HOST, camera: CAMERA_URL, nozzle: getNozzle(), printers: printers.list() });
@@ -105,8 +105,14 @@ export async function start(opts: StartOptions = {}) {
     return { nozzle };
   });
   app.get("/api/status", async () => status);
+  /** A browser acts on the printer it shows; if another is in use now (switched in another tab), it has to look again. */
+  const showing = (printer: string | undefined) => {
+    if (printer !== undefined && printer !== PRINTER_LABEL)
+      throw Object.assign(new Error(`Print Bay is using ${PRINTER_LABEL ?? "no printer"} now, not ${printer}. Check the Printer tab and try again.`), { statusCode: 409 });
+  };
   for (const action of ["pause", "resume", "cancel"] as const) {
-    app.post(`/api/printer/${action}`, async () => {
+    app.post<{ Body: { printer?: string } }>(`/api/printer/${action}`, async (req) => {
+      showing(req.body?.printer);
       await moonraker[action]();
       return { ok: true };
     });
@@ -190,10 +196,15 @@ export async function start(opts: StartOptions = {}) {
   });
 
   // ---- printing ----
-  app.post<{ Body: Parameters<typeof print>[0] }>("/api/print", async (req) =>
-    print(req.body));
+  app.post<{ Body: Parameters<typeof print>[0] & { printer?: string } }>("/api/print", async (req) => {
+    showing(req.body?.printer);
+    return print(req.body);
+  });
   app.get("/api/queue", async () => getQueue());
-  app.post("/api/queue/next", async () => startNext());
+  app.post<{ Body: { printer?: string } }>("/api/queue/next", async (req) => {
+    showing(req.body?.printer);
+    return startNext();
+  });
   app.delete<{ Params: { id: string } }>("/api/queue/:id", async (req) => {
     removeEntry(req.params.id);
     return getQueue();
