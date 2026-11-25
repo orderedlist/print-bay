@@ -161,7 +161,7 @@ button.sech { cursor: pointer; }
 .cta:disabled { opacity: 0.45; cursor: default; }
 .cta:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
 .cta.go { background: var(--acc); color: var(--acc-ink); }
-.cta.go:hover:not(:disabled) { filter: brightness(1.08); box-shadow: none; }
+.cta.go:hover:not(:disabled) { background: var(--acc); filter: brightness(1.08); box-shadow: none; }
 .cta.danger { color: var(--bad); }
 .cta-sm { height: 34px; font-size: 12.5px; width: auto; }
 .cta-md { height: 38px; }

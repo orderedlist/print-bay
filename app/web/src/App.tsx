@@ -41,6 +41,7 @@ function useNarrow() {
 
 export function App() {
   const live = useLive();
+  const updateReady = live.update?.state === "ready";
   const models = useModels(live.modelsVersion);
   const [repos, setRepos] = useRepos(live.modelsVersion);
   const changed = repos?.reduce((n, r) => n + r.changes.length, 0) ?? 0;
@@ -161,8 +162,11 @@ export function App() {
               <div className="muted" style={{ fontSize: 12 }}>K2 Workspace · {n} {n === 1 ? "model" : "models"}</div>
             </div>
             {!setup && (
-              <button className="ibtn" style={{ marginLeft: "auto" }} aria-label="Settings" title="Settings" aria-pressed={route.left === "settings"}
+              <button className="ibtn" style={{ marginLeft: "auto", position: "relative" }} aria-pressed={route.left === "settings"}
+                aria-label={updateReady ? `Settings: Print Bay ${live.update?.available} is ready to install` : "Settings"}
+                title={updateReady ? `Print Bay ${live.update?.available} is ready: restart to update` : "Settings"}
                 onClick={() => go(route.left === "settings" ? "/printer" : "/settings")}>
+                {updateReady && <span className="dot" style={{ position: "absolute", top: 4, right: 4, background: "var(--ok)" }} />}
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
               </button>
             )}
@@ -181,7 +185,7 @@ export function App() {
         </div>
         <div className="panel-body">
           {showSettings ? (
-            settings ? <SettingsPanel settings={settings} setSettings={setSettings} setup={setup} toast={toast} /> : <div className="sec muted">Loading…</div>
+            settings ? <SettingsPanel settings={settings} setSettings={setSettings} setup={setup} update={live.update} toast={toast} /> : <div className="sec muted">Loading…</div>
           ) : !models ? (
             <div className="sec muted">Loading…</div>
           ) : route.left === "printer" ? (

@@ -194,9 +194,11 @@ all of those, and only one release per tag: the app reads `latest-mac.yml`
 from the newest one.
 
 The installed app (`app/desktop/updater.js`) checks that feed at launch and
-every four hours, downloads a newer version in the background, and offers to
-restart; put off, it installs when you quit. **Print Bay → Check for
-Updates…** checks now. Updates only work in the signed, packaged app, and
+every four hours and downloads a newer version in the background, without
+dialogs. **Settings** shows the version and what the updater is doing, with
+**Check for updates** and, once one has downloaded, **Restart to update** (the
+gear gets a green dot); left alone, it installs when you quit. **Print Bay →
+Check for Updates…** checks and opens Settings. Updates only work in the signed, packaged app, and
 macOS only installs them when they're signed by the same certificate.
 
 ### Setup and Settings

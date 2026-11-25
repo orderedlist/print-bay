@@ -111,6 +111,16 @@ export interface SettingsView {
   tools: ToolStatus[];
   rates: Rates;
   library: { path: string; source: "env" | "chosen" | "checkout" | "default"; fresh: boolean; next: string | null; default: string };
-  desktop: { restart: boolean; pickFolder: boolean; version: string | null };
+  desktop: { restart: boolean; pickFolder: boolean };
   caps: Caps;
+}
+
+/** The desktop app's updater; null in a browser or run from a checkout. */
+export interface UpdateStatus {
+  version: string;
+  state: "idle" | "checking" | "current" | "downloading" | "ready" | "error";
+  available: string | null;
+  percent: number | null;
+  error: string | null;
+  checkedAt: number | null;
 }
