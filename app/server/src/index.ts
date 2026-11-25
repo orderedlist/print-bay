@@ -25,6 +25,8 @@ export interface StartOptions {
   /** The desktop app can restart itself (to open another library) and show a folder picker. */
   restart?: () => void;
   pickFolder?: () => Promise<string | null>;
+  /** The desktop app's version, which updates from GitHub Releases. */
+  version?: string;
 }
 
 export async function start(opts: StartOptions = {}) {
@@ -189,7 +191,7 @@ export async function start(opts: StartOptions = {}) {
   // Changing where the app reaches the printer, runs programs from, or pushes to: only from this computer.
   const local = (ip: string) => /^(127\.|::1$|::ffff:127\.)/.test(ip);
   const localOnly = (what: string) => Object.assign(new Error(`${what} from the computer running Print Bay`), { statusCode: 403 });
-  const desktop = { restart: !!opts.restart, pickFolder: !!opts.pickFolder };
+  const desktop = { restart: !!opts.restart, pickFolder: !!opts.pickFolder, version: opts.version ?? null };
   app.get("/api/settings", async () => ({ ...settings.view(), desktop }));
   app.put<{ Body: settings.SettingsUpdate }>("/api/settings", async (req) => {
     if (!local(req.ip)) throw localOnly("Change settings");

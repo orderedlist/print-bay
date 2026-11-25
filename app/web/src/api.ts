@@ -57,7 +57,7 @@ export function useModels(version: number): Model[] | null {
   return models;
 }
 
-/** The git repos (library, app): refetched when files change, the window regains focus, or `set` is called after an action. */
+/** The library's git repo: refetched when files change, the window regains focus, or `set` is called after an action. */
 export function useRepos(version: number): [Repo[] | null, (r: Repo[]) => void] {
   const [repos, setRepos] = useState<Repo[] | null>(null);
   useEffect(() => {

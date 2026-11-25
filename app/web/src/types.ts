@@ -84,7 +84,7 @@ export interface AgentSession {
 
 export interface RepoChange { path: string; status: "added" | "modified" | "deleted" | "renamed" | "conflict" }
 export interface Repo {
-  id: "library" | "app";
+  id: "library";
   name: string;
   path: string;
   branch: string | null;
@@ -111,6 +111,6 @@ export interface SettingsView {
   tools: ToolStatus[];
   rates: Rates;
   library: { path: string; source: "env" | "chosen" | "checkout" | "default"; fresh: boolean; next: string | null; default: string };
-  desktop: { restart: boolean; pickFolder: boolean };
+  desktop: { restart: boolean; pickFolder: boolean; version: string | null };
   caps: Caps;
 }

@@ -1,14 +1,14 @@
-// Git for the library and the app's own code: what changed, commit, push.
-// In a checkout that is its own library (see config.ts) the two are one repo.
+// Git for the library: what changed, commit, pull, push. The app's own code isn't here:
+// it updates from GitHub Releases (app/desktop/updater.js).
 import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { anyRunning } from "./agent.js";
-import { APP_ROOT, DATA, GIT, seedLibrary } from "./config.js";
+import { DATA, GIT, seedLibrary } from "./config.js";
 
 export interface RepoChange { path: string; status: "added" | "modified" | "deleted" | "renamed" | "conflict" }
 export interface Repo {
-  id: "library" | "app";
+  id: "library";
   name: string;
   path: string;
   branch: string | null; // null: detached
@@ -83,13 +83,8 @@ export async function ensureLibraryRepo(): Promise<void> {
 }
 
 async function roots(): Promise<{ id: Repo["id"]; name: string; dir: string }[]> {
-  // a packaged app's code is read-only and not a checkout, wherever the .app happens to sit
-  const [lib, app] = await Promise.all([toplevel(DATA), process.env.PRINT_BAY_PACKAGED ? null : toplevel(APP_ROOT)]);
-  if (lib && lib === app) return [{ id: "library", name: "Library and app", dir: lib }];
-  return [
-    ...(lib ? [{ id: "library" as const, name: "Library", dir: lib }] : []),
-    ...(app ? [{ id: "app" as const, name: "Print Bay app", dir: app }] : []),
-  ];
+  const lib = await toplevel(DATA);
+  return lib ? [{ id: "library", name: "Library", dir: lib }] : [];
 }
 
 async function dirFor(id: string): Promise<string> {
@@ -205,7 +200,6 @@ export async function push(id: string): Promise<Repo[]> {
 export interface PullResult {
   repos: Repo[];
   pulled: number; // commits that came in
-  appChanged: boolean; // the app's code changed: rebuild and restart to use it
   stashConflict: boolean; // uncommitted edits didn't reapply cleanly; they're kept in git's stash
 }
 
@@ -245,11 +239,9 @@ export async function pull(id: string): Promise<PullResult> {
   }
   fetchedAt.set(dir, Date.now());
   const pulled = Number((await git(dir, ["rev-list", "--count", `${before}..@{u}`])).trim());
-  const changed = pulled ? (await git(dir, ["diff", "--name-only", before, "@{u}"])).split("\n").filter(Boolean) : [];
   return {
     repos: await listRepos(),
     pulled,
-    appChanged: changed.some((p) => p.startsWith("app/")),
     stashConflict: /autostash resulted in conflicts|changes are safe in the stash/i.test(said),
   };
 }

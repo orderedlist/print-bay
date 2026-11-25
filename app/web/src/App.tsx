@@ -116,7 +116,7 @@ export function App() {
             <div className="stage-hint">
               {route.left === "changes" ? (
                 <><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><circle cx="6" cy="6" r="2.5" /><circle cx="6" cy="18" r="2.5" /><circle cx="18" cy="8" r="2.5" /><path d="M6 8.5v7M18 10.5c0 4-6 3-11 5.5" /></svg>
-                  <b>Commit and push your changes</b><span style={{ fontSize: 12 }}>Models and settings in the library, code in the app</span></>
+                  <b>Commit and push your changes</b><span style={{ fontSize: 12 }}>Models, jobs and settings in the library</span></>
               ) : route.left === "create" ? (
                 <><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" /></svg>
                   <b>Describe the part to Claude</b><span style={{ fontSize: 12 }}>It shows up here once it's drawn</span></>

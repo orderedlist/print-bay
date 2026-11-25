@@ -86,6 +86,7 @@ app.whenReady().then(async () => {
   const { start } = await loadServer();
   const serverOptions = {
     quiet: true,
+    version: app.isPackaged ? app.getVersion() : undefined,
     restart,
     pickFolder: async () => {
       const options = { title: "Choose a library folder", properties: ["openDirectory", "createDirectory"] };
