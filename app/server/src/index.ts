@@ -53,10 +53,17 @@ export async function start(opts: StartOptions = {}) {
   let status: moonraker.PrinterStatus = { ...moonraker.OFFLINE, message: "Connecting to the printer…" };
   let closed = false;
   let poll: NodeJS.Timeout | null = null;
-  const pollStatus = async () => {
-    status = await moonraker.getStatus();
+  /** Ask the printer in use how it is; an answer from one switched away from meanwhile is dropped. */
+  const pollPrinter = async () => {
+    const asked = K2_HOST;
+    const s = await moonraker.getStatus();
+    if (asked !== K2_HOST) return;
+    status = s;
     publish("status", status);
     printers.onStatus(status, printerChanged); // follows the printer to a new address
+  };
+  const pollStatus = async () => {
+    await pollPrinter();
     if (!closed) poll = setTimeout(pollStatus, 2000);
   };
   const printerView = () => ({ host: K2_HOST, camera: CAMERA_URL, nozzle: getNozzle(), printers: printers.list() });
@@ -66,7 +73,7 @@ export async function start(opts: StartOptions = {}) {
     publish("printer", printerView());
     publish("queue", getQueue());
     publish("models", null); // each printer has its own nozzle, so its own slices
-    void moonraker.getStatus().then((s) => { status = s; publish("status", s); });
+    void pollPrinter();
   };
   void pollStatus();
   app.addHook("onClose", async () => { closed = true; if (poll) clearTimeout(poll); stopSlices(); });
@@ -113,6 +120,8 @@ export async function start(opts: StartOptions = {}) {
   for (const action of ["pause", "resume", "cancel"] as const) {
     app.post<{ Body: { printer?: string } }>(`/api/printer/${action}`, async (req) => {
       showing(req.body?.printer);
+      const now = await moonraker.getStatus(); // still there, and still the same printer
+      if (!now.online) throw Object.assign(new Error(now.message || `Can't reach ${PRINTER_LABEL}`), { statusCode: 503 });
       await moonraker[action]();
       return { ok: true };
     });

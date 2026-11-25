@@ -79,31 +79,39 @@ export function forget(host: string): void {
 function learnName(hostname: string | null): void {
   const host = K2_HOST;
   if (K2_NAME || !hostname || !host || resolvePrinter().source !== "settings") return;
-  const s = readSettings();
-  if (!savedPrinters(s).some((p) => p.host === host)) return;
-  save(s, putting({ host, name: hostname }, savedPrinters(s)));
-  named(host, hostname);
+  try {
+    const s = readSettings();
+    if (!savedPrinters(s).some((p) => p.host === host)) return;
+    save(s, putting({ host, name: hostname }, savedPrinters(s)));
+    named(host, hostname);
+  } catch (e) { console.warn(`Couldn't save the printer's name: ${(e as Error).message}`); } // tried again next poll
 }
 
 /**
  * Look for the printer in use on the network and follow it to a new address. Matched by name;
  * a printer saved before names were kept has none, so with only it saved, the only printer
- * found is taken to be it. True when it moved.
+ * found is taken to be it. Every other saved printer found is followed too (two that swapped
+ * addresses, say). True when the one in use moved.
  */
 async function refind(): Promise<boolean> {
   const before = readSettings();
   const { host, source } = resolvePrinter(before);
-  const saved = savedPrinters(before);
-  const me = saved.find((p) => p.host === host);
+  const me = savedPrinters(before).find((p) => p.host === host);
   if (!host || !me || source !== "settings") return false;
   const found = await moonraker.scanForPrinters();
-  const matches = me.name ? found.filter((f) => sameName(me.name, f.hostname)) : saved.length === 1 ? found : [];
-  if (matches.length !== 1 || matches[0].host === host) return false; // two answering to one name: don't guess
-  const moved = { host: matches[0].host, name: matches[0].hostname };
   const s = readSettings();
-  if (resolvePrinter(s).host !== host) return false; // switched while scanning
-  save(s, putting(moved, savedPrinters(s).map((p) => (p.host === host ? moved : p))), moved.host);
-  named(host, moved.name);
+  const saved = savedPrinters(s);
+  // switched, renamed or sending while scanning: what was looked for isn't what's in use now
+  if (resolvePrinter(s).host !== host || saved.find((p) => p.host === host)?.name !== me.name || printing.isSending()) return false;
+  const at = (p: SavedPrinter) => {
+    const matches = p.name ? found.filter((f) => sameName(p.name, f.hostname)) : saved.length === 1 ? found : [];
+    return matches.length === 1 ? { host: matches[0].host, name: matches[0].hostname } : p; // two answering to one name: don't guess
+  };
+  const now = saved.map(at);
+  const moved = now[saved.indexOf(saved.find((p) => p.host === host)!)];
+  if (moved.host === host) return false;
+  save(s, now, moved.host);
+  saved.forEach((p, i) => named(p.host, now[i].name));
   return true;
 }
 

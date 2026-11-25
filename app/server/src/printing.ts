@@ -40,7 +40,9 @@ const state: { running: QueueEntry[]; entries: QueueEntry[] } = (() => {
   if (!fs.existsSync(QUEUE_FILE)) return { running: [], entries: [] };
   const file = JSON.parse(fs.readFileSync(QUEUE_FILE, "utf8"));
   const mine = (e: QueueEntry): QueueEntry => (e.printer || !PRINTER_ID ? e : { ...e, printer: PRINTER_ID });
-  return { running: (file.running ?? (file.active ? [file.active] : [])).map(mine), entries: (file.entries ?? []).map(mine) };
+  const state = { running: (file.running ?? (file.active ? [file.active] : [])).map(mine), entries: (file.entries ?? []).map(mine) };
+  if (!file.running) fs.writeFileSync(QUEUE_FILE, JSON.stringify(state, null, 2)); // kept for that printer, whichever is in use next time
+  return state;
 })();
 
 const forThisPrinter = (e: QueueEntry) => isThisPrinter(e.printer);

@@ -213,7 +213,8 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
   const multi = colorways.length > 1;
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [copies, setCopies] = useState(job?.copies ?? 1);
-  const [confirm, setConfirm] = useState(false);
+  const [confirm, setConfirm] = useState<{ printer?: string } | null>(null); // the printer the bed was checked on
+  useEffect(() => setConfirm(null), [status?.printer]); // switched (in another tab, say): that bed wasn't checked
   const [sending, setSending] = useState(false);
   const [materialPick, setMaterialPick] = useState<Material | null>(null); // null: as the printer has the spool set
   useEffect(() => { setPicked({}); setCopies(job?.copies ?? 1); setMaterialPick(null); }, [job?.name]); // a different part: its own colour and count
@@ -255,9 +256,9 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
     return () => clearTimeout(t);
   }, [perPlate, oneColor, !!exact, slicing]); // eslint-disable-line react-hooks/exhaustive-deps
   const count = perPlate * copies;
-  const submit = async (startNow: boolean) => {
+  const submit = async (startNow: boolean, printer = status?.printer ?? undefined) => {
     if (!job || !chosen) return;
-    setConfirm(false);
+    setConfirm(null);
     setSending(true);
     try {
       const r = await api<{ started: boolean; queued: number }>("/api/print", {
@@ -267,7 +268,7 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
               slots: Object.fromEntries(colorways.map((c, i) => [c.key, chosenAll[i]!.slot])) }
             : { color: chosen.color, slot: chosen.slot }),
           job: job.name, copies, perPlate, material, startNow,
-          printer: status?.printer ?? undefined, // the server refuses if another printer is in use by now
+          printer, // the server refuses if another printer is in use by now
         },
       });
       const what = `${title(model.id)}${job.label ? ` (${job.label})` : ""} in ${colorsText}`;
@@ -280,7 +281,7 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
   const print = () => {
     setTab("print");
     if (!job || !chosen || sending) return;
-    if (idle) setConfirm(true);
+    if (idle) setConfirm({ printer: status?.printer ?? undefined });
     else submit(false);
   };
   const total = stats ? `${estimated ? "≈ " : ""}${duration(stats.seconds * copies)}` : null;
@@ -611,17 +612,17 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
       </aside>, inspectorSlot)}
 
       {confirm && (
-        <div className="scrim" onClick={() => setConfirm(false)}>
+        <div className="scrim" onClick={() => setConfirm(null)}>
           <div className="panel dialog" role="dialog" aria-modal="true" aria-labelledby="bed-clear" onClick={(e) => e.stopPropagation()}>
-            <h2 id="bed-clear">Is the bed clear?</h2>
+            <h2 id="bed-clear">Is the bed clear{confirm.printer ? ` on ${confirm.printer}` : ""}?</h2>
             <div className="muted">
               {count > 1 ? `${count} × ` : ""}{title(model.id)} in {colorsText}{perPlate > 1 ? `, ${perPlate} to a plate` : ""}{copies > 1 ? `, ${copies} plates` : ""}.
               The first copy starts as soon as it's sent{stale ? " (it slices first)" : ""}.
               {copies > 1 ? ` You'll confirm a clear bed before each later ${fit > 1 ? "plate" : "copy"}.` : ""}
             </div>
             <div className="grid2">
-              <button className="cta cta-md" onClick={() => submit(false)}>Add to queue</button>
-              <button className="cta cta-md go" autoFocus onClick={() => submit(true)}>Clear, start it</button>
+              <button className="cta cta-md" onClick={() => submit(false, confirm.printer)}>Add to queue</button>
+              <button className="cta cta-md go" autoFocus onClick={() => submit(true, confirm.printer)}>Clear, start it</button>
             </div>
           </div>
         </div>
