@@ -2,10 +2,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  APP_ROOT, chooseLibrary, DATA, DEFAULT_LIBRARY, LIBRARY_SOURCE, normalizeHost, readSettings, resolvePrinter, resolveTool, writeSettings,
+  APP_ROOT, chooseLibrary, DATA, DEFAULT_LIBRARY, LIBRARY_SOURCE, readSettings, resolvePrinter, resolveTool, writeSettings,
   type LibrarySource, type Settings, type Source, type ToolName,
 } from "./config.js";
 import { rates, type Rates } from "./jobs.js";
+import * as printers from "./printers.js";
 
 export interface ToolStatus {
   name: ToolName;
@@ -21,7 +22,7 @@ export interface ToolStatus {
 
 export interface SettingsView {
   needsSetup: boolean;
-  printer: { host: string | null; source: Source };
+  printer: { host: string | null; source: Source; saved: printers.KnownPrinter[] };
   tools: ToolStatus[];
   rates: Rates;
   /** `next`: chosen in Settings, used from the next start */
@@ -62,7 +63,7 @@ export function view(): SettingsView {
   return {
     // a checkout that is its own library was set up before settings existed
     needsSetup: !s.setupDone && path.resolve(DATA) !== path.resolve(APP_ROOT),
-    printer: resolvePrinter(s),
+    printer: { ...resolvePrinter(s), saved: printers.list() },
     tools,
     rates: rates(),
     library: { path: DATA, source: LIBRARY_SOURCE, fresh: libraryFresh(), next: nextLibrary, default: DEFAULT_LIBRARY },
@@ -74,18 +75,17 @@ let nextLibrary: string | null = null; // chosen this run; the server reads the 
 
 export interface SettingsUpdate {
   library?: string | null; // a folder to use from the next start; null: the default
-  printer?: string | null; // "" or null clears it
+  printer?: string; // an address: save that printer (if it isn't) and use it
+  forgetPrinter?: string; // a saved printer's address
   tools?: Partial<Record<ToolName, string | null>>; // null: find it again
   rates?: Partial<Rates>;
   setupDone?: boolean;
 }
 
 export function update(u: SettingsUpdate): SettingsView {
+  if (u.printer) printers.add(u.printer);
+  if (u.forgetPrinter) printers.forget(u.forgetPrinter);
   const s = readSettings();
-  if (u.printer !== undefined) {
-    if (u.printer) s.printer = normalizeHost(u.printer);
-    else delete s.printer;
-  }
   if (u.tools) {
     s.tools = { ...s.tools };
     for (const [name, value] of Object.entries(u.tools) as [ToolName, string | null][]) {

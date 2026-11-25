@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { CACHE } from "./config.js";
+import { CACHE, K2_HOST, K2_NAME } from "./config.js";
 import { publish } from "./events.js";
 import { gcodePath, getJob, hexFor, isMaterial, isStale, type Material } from "./jobs.js";
 import * as moonraker from "./moonraker.js";
@@ -26,6 +26,7 @@ export interface QueueEntry {
   filename: string; // already uploaded to the printer
   copy: number;
   of: number;
+  printer?: string; // uploaded to: its name, or its address until it had one (none: queued before there could be several)
 }
 
 interface QueueState { active: QueueEntry | null; entries: QueueEntry[] }
@@ -35,12 +36,19 @@ let state: QueueState = fs.existsSync(QUEUE_FILE)
   ? JSON.parse(fs.readFileSync(QUEUE_FILE, "utf8"))
   : { active: null, entries: [] };
 
+/** Each printer has its own queue: a copy is uploaded to one printer and can only start there. */
+const forThisPrinter = (e: QueueEntry) => !e.printer || e.printer === K2_NAME || e.printer === K2_HOST;
+
+/** The queue of the printer in use. */
+export const getQueue = (): QueueState => ({
+  active: state.active && forThisPrinter(state.active) ? state.active : null,
+  entries: state.entries.filter(forThisPrinter),
+});
+
 function save() {
   fs.writeFileSync(QUEUE_FILE, JSON.stringify(state, null, 2));
-  publish("queue", state);
+  publish("queue", getQueue());
 }
-
-export const getQueue = () => state;
 
 const fail = (message: string, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 
@@ -133,7 +141,7 @@ export async function print(opts: {
     id: randomUUID(), job: job.name, color: oneColor ? colors[0] : colors.join(" + "), hex: slot.color,
     ...(feeds.length > 1 ? { hexes: feeds.map((s) => s.color) } : {}), slot: feeds.map((s) => s.slot).join(" + "),
     ...(perPlate > 1 ? { perPlate } : {}), ...(material === "pla" ? {} : { material }),
-    filename: path.basename(file), copy: i + 1, of: copies,
+    filename: path.basename(file), copy: i + 1, of: copies, printer: K2_NAME ?? K2_HOST ?? undefined,
   }));
   let started = false;
   if (opts.startNow) {
@@ -147,12 +155,12 @@ export async function print(opts: {
 
 /** Start the next queued copy once someone confirms the bed is clear. */
 export async function startNext() {
-  const next = state.entries[0];
+  const next = state.entries.find(forThisPrinter);
   if (!next) throw fail("The queue is empty", 409);
   const status = await moonraker.getStatus();
   if (!moonraker.IDLE_STATES.has(status.state)) throw fail(`The printer is ${status.state}`, 409);
   await startEntry(next);
-  state.entries.shift();
+  state.entries = state.entries.filter((e) => e !== next);
   save();
   return next;
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AgentSession, Model, PrinterStatus, QueueState, Repo, SettingsView, SliceEvent, UpdateStatus } from "./types";
+import type { AgentSession, Model, PrinterStatus, QueueState, Repo, SavedPrinter, SettingsView, SliceEvent, UpdateStatus } from "./types";
 
 export async function api<T = unknown>(path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
   const { json, ...rest } = init ?? {};
@@ -136,3 +136,8 @@ export function useAgentSession(id: string | null, live: Live): AgentSession | n
   if (!id) return null;
   return live.agents[id] ?? (fetched?.id === id ? fetched : null);
 }
+
+/** A saved printer's address as typed (Moonraker's port left off). */
+export const shortHost = (host: string) => host.replace(/:7125$/, "");
+/** What a saved printer calls itself, or its address until it has answered. */
+export const printerName = (p: SavedPrinter) => p.name ?? shortHost(p.host);

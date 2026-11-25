@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api";
-import type { Rates, Repo, SettingsView, ToolName, ToolStatus, UpdateStatus } from "../types";
+import { api, printerName, shortHost } from "../api";
+import type { Rates, Repo, SavedPrinter, SettingsView, ToolName, ToolStatus, UpdateStatus } from "../types";
 
 interface Props {
   settings: SettingsView;
@@ -65,13 +65,15 @@ export function SettingsPanel({ settings, setSettings, setup, update, toast }: P
 interface FoundPrinter { host: string; ip: string; hostname: string; state: string; k2: boolean }
 
 function PrinterSection({ settings, save, toast }: { settings: SettingsView; save: (b: object, done?: string) => Promise<boolean>; toast: Props["toast"] }) {
-  const current = settings.printer.host?.replace(/:7125$/, "") ?? "";
-  const [host, setHost] = useState(current);
+  const saved = settings.printer.saved;
+  const [host, setHost] = useState(saved.length ? "" : shortHost(settings.printer.host ?? ""));
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [scanning, setScanning] = useState(false);
   const [found, setFound] = useState<FoundPrinter[] | null>(null);
   const fromEnv = settings.printer.source === "env";
+  const isSaved = (f: FoundPrinter) => saved.some((p) => p.host === f.host || p.name?.toLowerCase() === f.hostname.toLowerCase());
+  const unsaved = found?.filter((f) => !isSaved(f));
 
   const scan = async () => {
     setScanning(true);
@@ -82,9 +84,8 @@ function PrinterSection({ settings, save, toast }: { settings: SettingsView; sav
   // no printer yet: look for one straight away
   useEffect(() => { if (!settings.printer.host && !fromEnv) void scan(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const use = async (f: FoundPrinter) => {
-    if (await save({ printer: f.host }, `Using ${f.hostname}.`)) { setHost(f.ip); setResult(null); }
-  };
+  const use = (p: { host: string }, name: string) => save({ printer: p.host }, `Using ${name}.`);
+  const forget = (p: SavedPrinter) => save({ forgetPrinter: p.host }, `Forgot ${printerName(p)}.`);
   const test = async () => {
     setBusy(true);
     setResult(null);
@@ -96,17 +97,20 @@ function PrinterSection({ settings, save, toast }: { settings: SettingsView; sav
     finally { setBusy(false); }
   };
   const testAndSave = async () => {
-    if (!host.trim()) { await save({ printer: null }, "Printer forgotten."); return; }
     const ok = await test();
     // an unreachable printer may just be off: save anyway, and say so
-    if (await save({ printer: host }, ok ? "Printer saved." : undefined) && !ok) toast("Saved, but the printer didn't answer. Is it on?", true);
+    if (await save({ printer: host }, ok ? "Printer saved." : undefined)) {
+      if (!ok) toast("Saved, but the printer didn't answer. Is it on?", true);
+      setHost("");
+      setResult(null);
+    }
   };
 
   return (
     <div className="sec">
       <div className="sech">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 17h8M9 7h6v5H9z" /></svg>
-        Printer
+        {saved.length > 1 ? "Printers" : "Printer"}
         {!fromEnv && (
           <button className="link-btn" style={{ marginLeft: "auto", fontSize: 12, letterSpacing: 0, textTransform: "none" }} disabled={scanning} onClick={scan}>
             {scanning ? "Scanning…" : found ? "Scan again" : "Scan network"}
@@ -117,21 +121,37 @@ function PrinterSection({ settings, save, toast }: { settings: SettingsView; sav
         <div className="faint" style={{ fontSize: 12, marginTop: 8 }}>Set by K2_HOST in the environment: <span className="mono">{settings.printer.host}</span></div>
       ) : (
         <>
-          {scanning && !found && <div className="muted" style={{ fontSize: 12, marginTop: 10 }}><span className="spinner" style={{ display: "inline-block", verticalAlign: "-2px", marginRight: 8 }} />Looking for printers on your network…</div>}
-          {found && found.length > 0 && (
+          {saved.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 10 }}>
-              {found.map((f) => {
-                const inUse = f.host === settings.printer.host;
-                return (
-                  <button key={f.host} className="row" aria-current={inUse} disabled={inUse} onClick={() => use(f)} title={inUse ? "In use" : `Use ${f.hostname}`}>
-                    <span className="row-text">
-                      <span className="row-title">{f.hostname}{f.k2 ? "" : " (not a K2?)"}</span>
-                      <span className="row-sub">{f.ip} · {f.state}</span>
-                    </span>
-                    <span style={{ fontSize: 12, color: inUse ? "var(--ok)" : "var(--acc)", flex: "none" }}>{inUse ? "In use" : "Use"}</span>
+              {saved.map((p) => (
+                <div key={p.host} className="row" style={{ cursor: "default" }} aria-current={p.active}>
+                  <span className="row-text">
+                    <span className="row-title">{printerName(p)}</span>
+                    <span className="row-sub">{p.name ? shortHost(p.host) : "hasn't answered yet"}</span>
+                  </span>
+                  {p.active
+                    ? <span style={{ fontSize: 12, color: "var(--ok)", flex: "none" }}>In use</span>
+                    : <button className="link-btn" style={{ fontSize: 12, flex: "none" }} onClick={() => use(p, printerName(p))}>Use</button>}
+                  <button className="ibtn" aria-label={`Forget ${printerName(p)}`} title="Forget" onClick={() => forget(p)}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
                   </button>
-                );
-              })}
+                </div>
+              ))}
+            </div>
+          )}
+          {scanning && !found && <div className="muted" style={{ fontSize: 12, marginTop: 10 }}><span className="spinner" style={{ display: "inline-block", verticalAlign: "-2px", marginRight: 8 }} />Looking for printers on your network…</div>}
+          {unsaved && unsaved.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 10 }}>
+              {saved.length > 0 && <div className="faint" style={{ fontSize: 12, marginBottom: 4 }}>Also on your network</div>}
+              {unsaved.map((f) => (
+                <button key={f.host} className="row" onClick={() => use(f, f.hostname)} title={`Use ${f.hostname}`}>
+                  <span className="row-text">
+                    <span className="row-title">{f.hostname}{f.k2 ? "" : " (not a K2?)"}</span>
+                    <span className="row-sub">{f.ip} · {f.state}</span>
+                  </span>
+                  <span style={{ fontSize: 12, color: "var(--acc)", flex: "none" }}>Use</span>
+                </button>
+              ))}
             </div>
           )}
           {found && found.length === 0 && (
@@ -139,17 +159,20 @@ function PrinterSection({ settings, save, toast }: { settings: SettingsView; sav
               No printer answered on this network. Check the K2 is on and on the same Wi-Fi as this Mac, or type its IP address below (on the printer: Settings → Network).
             </div>
           )}
+          {found && found.length > 0 && !unsaved?.length && (
+            <div className="faint" style={{ fontSize: 12, marginTop: 10 }}>Every printer on your network is saved.</div>
+          )}
           <div className="muted" style={{ fontSize: 12, marginTop: 12, lineHeight: 1.45 }}>
-            {found?.length ? "Or type its address." : "Its IP address or host name."} Giving the printer a fixed address in your router keeps it from moving.
+            {saved.length || found?.length ? "Or add one by address." : "Its IP address or host name."} When a printer gets a new address, Print Bay finds it again by name.
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
             <input className="field mono" value={host} placeholder="192.168.1.50" aria-label="Printer address"
-              onChange={(e) => { setHost(e.target.value); setResult(null); }} onKeyDown={(e) => { if (e.key === "Enter" && !busy) testAndSave(); }} />
+              onChange={(e) => { setHost(e.target.value); setResult(null); }} onKeyDown={(e) => { if (e.key === "Enter" && !busy && host.trim()) testAndSave(); }} />
             <button className="cta cta-sm" style={{ padding: "0 12px", flex: "none" }} disabled={busy || !host.trim()} onClick={test}>{busy ? "Testing…" : "Test"}</button>
           </div>
           {result && <div style={{ fontSize: 12, marginTop: 8, color: result.ok ? "var(--ok)" : "var(--bad)" }}>{result.text}</div>}
-          {host.trim() !== current && (
-            <button className="cta cta-md go" style={{ marginTop: 10 }} disabled={busy} onClick={testAndSave}>{host.trim() ? "Save printer" : "Forget printer"}</button>
+          {host.trim() && (
+            <button className="cta cta-md go" style={{ marginTop: 10 }} disabled={busy} onClick={testAndSave}>Save printer</button>
           )}
         </>
       )}

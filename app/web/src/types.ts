@@ -8,6 +8,7 @@ export interface Slot { slot: string; tool: number; color: string; remain: numbe
 export const slotName = (slot: string) => (slot === "EXT" ? "outside spool" : slot);
 
 export interface PrinterStatus {
+  printer: string | null; // the one in use: its name, or its address until it has answered
   online: boolean;
   state: string;
   filename: string;
@@ -105,9 +106,12 @@ export interface ToolStatus {
 }
 export interface Rates { filament_per_kg: number; printer_watts: number; power_per_kwh: number }
 export interface Caps { slice: boolean; openscad: boolean; claude: boolean; git: boolean; nurb: boolean }
+/** A printer saved on this computer; `name` is what it calls itself, once it has answered. */
+export interface SavedPrinter { host: string; name?: string; active: boolean }
+
 export interface SettingsView {
   needsSetup: boolean;
-  printer: { host: string | null; source: SettingSource };
+  printer: { host: string | null; source: SettingSource; saved: SavedPrinter[] };
   tools: ToolStatus[];
   rates: Rates;
   library: { path: string; source: "env" | "chosen" | "checkout" | "default"; fresh: boolean; next: string | null; default: string };

@@ -56,7 +56,14 @@ export const HOST = process.env.BIND ?? "0.0.0.0"; // LAN, so a phone can use it
 
 export const SETTINGS_FILE = path.join(DATA, "settings.json");
 export type ToolName = "orca" | "openscad" | "claude" | "git" | "nurb";
-export interface Settings { printer?: string; tools?: Partial<Record<ToolName, string>>; setupDone?: boolean }
+/**
+ * A printer this computer has used. `name` is what the printer calls itself (Moonraker's
+ * hostname, e.g. K2-360F): it stays put when the router hands the printer a new address,
+ * so it's how the printer is found again (printers.ts).
+ */
+export interface SavedPrinter { host: string; name?: string }
+/** `printer` is the address of the one in use; `printers` every one saved, that one included. */
+export interface Settings { printer?: string; printers?: SavedPrinter[]; tools?: Partial<Record<ToolName, string>>; setupDone?: boolean }
 
 export function readSettings(): Settings {
   try { return JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8")) as Settings; } catch { return {}; }
@@ -65,6 +72,13 @@ export function readSettings(): Settings {
 export function writeSettings(next: Settings): void {
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(next, null, 2) + "\n");
   applySettings();
+}
+
+/** The saved printers; settings from before there could be several have only the one address. */
+export function savedPrinters(s: Settings): SavedPrinter[] {
+  const list = (s.printers ?? []).map((p) => ({ ...p }));
+  if (s.printer && !list.some((p) => p.host === s.printer)) list.unshift({ host: s.printer });
+  return list;
 }
 
 /** A checkout that is its own library predates settings: it keeps the printer it always used. */
@@ -119,6 +133,7 @@ export function resolvePrinter(settings = readSettings()): { host: string | null
 
 // Live bindings: modules that import these see new values after applySettings().
 export let K2_HOST: string | null = null;
+export let K2_NAME: string | null = null; // what the printer in use calls itself, once it has said
 export let MOONRAKER: string | null = null;
 export let CAMERA_URL: string | null = null;
 export let ORCA = "";
@@ -131,6 +146,7 @@ export let NURB_PYTHON = "";
 export function applySettings(): void {
   const s = readSettings();
   K2_HOST = resolvePrinter(s).host;
+  K2_NAME = savedPrinters(s).find((p) => p.host === K2_HOST)?.name ?? null;
   MOONRAKER = K2_HOST ? `http://${K2_HOST}` : null;
   CAMERA_URL = K2_HOST ? `http://${K2_HOST.split(":")[0]}:8000/call/webrtc_local` : null;
   ORCA = resolveTool("orca", s).path;

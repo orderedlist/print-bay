@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { MOONRAKER } from "./config.js";
+import { K2_HOST, K2_NAME, MOONRAKER } from "./config.js";
 import type { Material } from "./jobs.js";
 
 /** Creality filament ids (Orca's filament_id; the CFS reports them as material_type) that aren't plain PLA. */
@@ -21,6 +21,7 @@ export interface Slot {
 }
 
 export interface PrinterStatus {
+  printer: string | null; // the one in use: its name, or its address until it has answered
   online: boolean;
   state: string; // standby | printing | paused | complete | cancelled | error | offline
   filename: string;
@@ -71,23 +72,25 @@ function slotsFrom(box: any, rack: any): Slot[] {
 }
 
 export const OFFLINE: PrinterStatus = {
-  online: false, state: "offline", filename: "", progress: 0, printSeconds: 0, etaSeconds: null,
+  printer: null, online: false, state: "offline", filename: "", progress: 0, printSeconds: 0, etaSeconds: null,
   layer: { current: null, total: null }, nozzle: { temp: 0, target: 0 }, bed: { temp: 0, target: 0 },
   slots: [], message: "",
 };
 
 export async function getStatus(): Promise<PrinterStatus> {
+  const printer = K2_NAME ?? K2_HOST?.replace(/:7125$/, "") ?? null;
   let s: any;
   try {
     const q = "print_stats&extruder&heater_bed&display_status&virtual_sdcard&box&filament_rack";
     s = ((await api("GET", `/printer/objects/query?${q}`, {}, 5000)) as any).status;
   } catch (e) {
-    return { ...OFFLINE, message: (e as Error).message };
+    return { ...OFFLINE, printer, message: (e as Error).message };
   }
   const ps = s.print_stats ?? {};
   const progress = s.display_status?.progress || s.virtual_sdcard?.progress || 0;
   const elapsed = Math.round(ps.print_duration ?? 0);
   return {
+    printer,
     online: true,
     state: ps.state ?? "standby",
     filename: ps.filename ?? "",
