@@ -65,7 +65,8 @@
         "repo": "print-bay",
         "releaseType": "release"
       }
-    ]
+    ],
+    "afterPack": "unique-uuid.cjs"
   },
   "devDependencies": {
     "electron": "44.5.1",
