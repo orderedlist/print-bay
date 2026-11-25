@@ -230,9 +230,10 @@ export async function start(opts: StartOptions = {}) {
     printers.sync();
     return { ok: true };
   });
-  app.post("/api/settings/scan-printers", async () => {
+  // anyone can look; only this computer moves saved printers to what it finds (the hunt does it on its own too)
+  app.post("/api/settings/scan-printers", async (req) => {
     const found = await moonraker.scanForPrinters();
-    const moved = settings.applyScan(found);
+    const moved = local(req.ip) ? settings.applyScan(found) : [];
     if (moved.length) printers.sync(); // poll them at their new addresses
     return { found, moved };
   });
