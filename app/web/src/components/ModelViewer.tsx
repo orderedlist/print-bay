@@ -31,7 +31,7 @@ interface Props {
   slice?: SliceChoice;
 }
 
-export interface SliceChoice { perPlate: number; material: Material; oneColor: boolean; slicedAt: number | null }
+export interface SliceChoice { perPlate: number; material: Material; oneColor: boolean; slicedAt: number | null; printer: string | null }
 
 /** The model on the full-window stage, plus the floating controls for the current view. */
 export function ModelViewer({ model, job: shown, mode, setMode, theme, shift, onSize, onAvailable, onStatus, checks, colors, slice }: Props) {
@@ -54,7 +54,7 @@ export function ModelViewer({ model, job: shown, mode, setMode, theme, shift, on
   const plateKey = meshJob?.plate ? JSON.stringify(meshJob.plate) : "";
   // the slice picked in the Print box, once there is one; a part picked that isn't sliced shows none
   const pick = slice && (!shown || job === shown) ? slice : null;
-  const pathsKey = !job ? null : pick ? `${job.name}:${pick.perPlate}:${pick.material}:${pick.oneColor}:${pick.slicedAt}` : `${job.name}:${job.stats!.slicedAt}`;
+  const pathsKey = !job ? null : pick ? `${job.name}:${pick.perPlate}:${pick.material}:${pick.oneColor}:${pick.printer}:${pick.slicedAt}` : `${job.name}:${job.stats!.slicedAt}`;
   const shownPlate = useRef(1); // the plate count last brought into view
 
   useEffect(() => {
@@ -91,7 +91,7 @@ export function ModelViewer({ model, job: shown, mode, setMode, theme, shift, on
     if (!stage) return;
     let alive = true;
     if (!job || (pick && !pick.slicedAt)) { stage.setToolpaths(null); setPaths(null); return; } // not sliced that way yet
-    const q = pick ? `?perPlate=${pick.perPlate}&material=${pick.material}${pick.oneColor ? "&oneColor=1" : ""}` : "";
+    const q = pick ? `?perPlate=${pick.perPlate}&material=${pick.material}${pick.oneColor ? "&oneColor=1" : ""}${pick.printer ? `&printer=${encodeURIComponent(pick.printer)}` : ""}` : "";
     api<ArrayBuffer>(`/api/jobs/${job.name}/toolpaths${q}`)
       .then((buf) => {
         if (!alive) return;

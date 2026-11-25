@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, colorName, duration, jobFromFilename, title, type Live } from "../api";
+import { SegRow } from "../components/SegRow";
 import { Thumb } from "../components/Thumb";
 import { IDLE_STATES, type Model, type Printer } from "../types";
 
@@ -70,8 +71,6 @@ export function PrinterPanel({ live, printer, pickPrinter, models, toast, openMo
   const queue = { active: live.queue.active[id] ?? null, entries: live.queue.entries.filter((e) => e.printer === id) };
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [nozzle, setNozzle] = useState<string | null>(null); // mm; set here, since the printer doesn't report a swap
-  useEffect(() => { api<{ nozzle: string }>("/api/printer").then((p) => setNozzle(p.nozzle)).catch(() => {}); }, []);
 
   const act = async (fn: () => Promise<unknown>, done?: string) => {
     setBusy(true);
@@ -143,17 +142,12 @@ export function PrinterPanel({ live, printer, pickPrinter, models, toast, openMo
             </div>
           ))}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
-          <span style={{ flexGrow: 1 }}>Nozzle size</span>
-          <div className="seg seg-sm" role="radiogroup" aria-label="Nozzle size" style={{ flex: "none" }}>
-            {["0.4", "0.6"].map((n) => (
-              <button key={n} role="radio" aria-checked={nozzle === n} disabled={busy || nozzle === null} style={{ padding: "0 10px" }}
-                onClick={() => nozzle !== n && act(async () => { await api("/api/printer/nozzle", { method: "PUT", json: { nozzle: n } }); setNozzle(n); },
-                  `Slicing for the ${n} mm nozzle from now on.`)}>{n} mm</button>
-            ))}
-          </div>
+        <div style={{ marginTop: 12 }}>
+          <SegRow label="Nozzle size" disabled={busy} value={printer?.nozzle ?? null} options={["0.4", "0.6"].map((n) => ({ value: n, label: `${n} mm` }))}
+            onPick={(n) => act(() => api(`/api/printers/${id}/nozzle`, { method: "PUT", json: { nozzle: n } }),
+              `Slicing for ${several ? `${printer?.name}'s` : "the"} ${n} mm nozzle from now on.`)} />
         </div>
-        <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>Set this when you swap the nozzle: prints are sliced for it.</div>
+        <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>Set this when you swap {several ? "this printer's" : "the"} nozzle: its prints are sliced for it.</div>
       </div>
 
       <div className="sec">

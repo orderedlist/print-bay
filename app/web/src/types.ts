@@ -22,7 +22,7 @@ export interface PrinterStatus {
 }
 
 /** A printer set up in Settings, with its live status. */
-export interface Printer { id: string; name: string; host: string; hostname: string | null; camera: string; status: PrinterStatus }
+export interface Printer { id: string; name: string; host: string; hostname: string | null; camera: string; nozzle: string; status: PrinterStatus }
 export interface PrinterConfig { id: string; name: string; host: string; hostname?: string; mac?: string }
 
 export interface Cost { filament: number; power: number; total: number }

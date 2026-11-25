@@ -3,6 +3,7 @@ import { cameraUrl, PRINTERS, type PrinterConfig } from "./config.js";
 import { publish } from "./events.js";
 import * as moonraker from "./moonraker.js";
 import * as settings from "./settings.js";
+import { getNozzle, type Nozzle } from "./nozzle.js";
 
 const LOOK_AFTER_MS = 30_000; // offline this long: it may have a new address, so look for it
 const LOOK_EVERY_MS = 3 * 60_000; // at most this often: a scan knocks on a thousand addresses
@@ -13,6 +14,7 @@ export interface PrinterView {
   host: string;
   hostname: string | null;
   camera: string;
+  nozzle: Nozzle; // set in the app: the printer doesn't report a swap
   status: moonraker.PrinterStatus;
 }
 
@@ -24,7 +26,7 @@ const fail = (message: string, statusCode = 400) => Object.assign(new Error(mess
 
 export function view(): PrinterView[] {
   return PRINTERS.map((p) => ({
-    id: p.id, name: p.name, host: p.host, hostname: p.hostname ?? null, camera: cameraUrl(p.host),
+    id: p.id, name: p.name, host: p.host, hostname: p.hostname ?? null, camera: cameraUrl(p.host), nozzle: getNozzle(p.id),
     status: statuses.get(p.id) ?? { ...moonraker.OFFLINE, message: "Connecting to the printer…" },
   }));
 }

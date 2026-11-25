@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { DATA, ORCA } from "./config.js";
 import { publish } from "./events.js";
 import { getJob, type Material } from "./jobs.js";
-import { getNozzle, STOCK } from "./nozzle.js";
+import { STOCK, type Nozzle } from "./nozzle.js";
 
 const running = new Map<string, Promise<void>>();
 
@@ -17,12 +17,11 @@ export function isSlicing(job: string) {
 
 /**
  * `perPlate` > 1 slices that many laid out on one plate (OpenSCAD jobs); `material`, for that
- * spool instead of PLA; `oneColor`, a multi-colour job all on one filament. Always for the nozzle set in the app.
+ * spool instead of PLA; `oneColor`, a multi-colour job all on one filament; `nozzle`, the one on the printer it's for.
  */
-export function slice(jobName: string, perPlate = 1, material: Material = "pla", oneColor = false): Promise<void> {
+export function slice(jobName: string, perPlate = 1, material: Material = "pla", oneColor = false, nozzle: Nozzle = STOCK): Promise<void> {
   const job = getJob(jobName);
   if (!fs.existsSync(ORCA)) throw Object.assign(new Error("OrcaSlicer isn't set up, so nothing can be sliced. Install it or set its path in Settings."), { statusCode: 409 });
-  const nozzle = getNozzle();
   const key = `${job.name}${perPlate > 1 ? `@${perPlate}` : ""}${oneColor ? "@1c" : ""}${material === "pla" ? "" : `@${material}`}${nozzle === STOCK ? "" : `@${nozzle}mm`}`;
   if (running.has(key)) return running.get(key)!;
 

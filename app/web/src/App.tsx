@@ -43,7 +43,8 @@ export function App() {
   const live = useLive();
   const [printer, pickPrinter] = useCurrentPrinter(live.printers);
   const updateReady = live.update?.state === "ready";
-  const models = useModels(live.modelsVersion);
+  // slices are per nozzle, and each printer has its own: a printer with another nozzle refetches
+  const models = useModels(live.modelsVersion, printer?.id ?? null);
   const [repos, setRepos] = useRepos(live.modelsVersion);
   const changed = repos?.reduce((n, r) => n + r.changes.length, 0) ?? 0;
   const [settings, setSettings] = useSettings();

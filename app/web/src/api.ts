@@ -51,11 +51,12 @@ export function useLive(): Live {
   return live;
 }
 
-export function useModels(version: number): Model[] | null {
+/** Every model, with its slices for the nozzle on `printer` (the one in view). */
+export function useModels(version: number, printer: string | null): Model[] | null {
   const [models, setModels] = useState<Model[] | null>(null);
   useEffect(() => {
-    api<Model[]>("/api/models").then(setModels).catch(() => setModels([]));
-  }, [version]);
+    api<Model[]>(`/api/models${printer ? `?printer=${encodeURIComponent(printer)}` : ""}`).then(setModels).catch(() => setModels([]));
+  }, [version, printer]);
   return models;
 }
 

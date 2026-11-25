@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  APP_ROOT, chooseLibrary, DATA, DEFAULT_LIBRARY, LIBRARY_SOURCE, normalizeHost, readSettings, resolvePrinters, resolveTool, writeSettings,
+  APP_ROOT, chooseLibrary, DATA, DEFAULT_LIBRARY, LIBRARY_SOURCE, normalizeHost, readSettings, resolvePrinters, resolveTool, toSaved, writeSettings,
   type LibrarySource, type PrinterConfig, type Settings, type Source, type ToolName,
 } from "./config.js";
 import { rates, type Rates } from "./jobs.js";
@@ -127,10 +127,11 @@ function editablePrinters(): { s: Settings; list: PrinterConfig[] } {
 }
 
 function savePrinters(s: Settings, list: PrinterConfig[]): PrinterConfig[] {
-  // older copies of Print Bay read only `printer`: keep the first one there, so one sharing the library still prints
-  if (list[0]) s.printer = list[0].host;
-  else delete s.printer;
-  s.printers = list;
+  // Print Bay 0.3 uses one printer at a time, `printer`: keep the one it was using (at its address now), else the first
+  const inUse = resolvePrinters(s).printers.find((p) => p.host === s.printer)?.id;
+  Object.assign(s, toSaved(list));
+  s.printer = list.find((p) => p.id === inUse)?.host ?? list[0]?.host;
+  if (!s.printer) delete s.printer;
   writeSettings(s);
   return list;
 }
@@ -188,8 +189,10 @@ export function applyScan(found: FoundPrinter[]): Moved[] {
   const list = printers.map((p): PrinterConfig => {
     // a known printer is wherever its MAC or name turns up, even if the router swapped two printers' addresses
     // one not known yet is whoever answers at its address, unless that's another saved printer
+    // and the only printer saved, with nothing to know it by, is the only one found (as 0.3 did)
     const f = known(p) ? found.find((x) => sameIdentity(p, x))
-      : found.find((x) => x.host === p.host && !printers.some((o) => o !== p && known(o) && sameIdentity(o, x)));
+      : found.find((x) => x.host === p.host && !printers.some((o) => o !== p && known(o) && sameIdentity(o, x)))
+        ?? (printers.length === 1 && found.length === 1 ? found[0] : undefined);
     if (!f) return p;
     if (f.host !== p.host) moved.push({ id: p.id, name: p.name, from: p.host, to: f.host });
     return { ...p, host: f.host, hostname: p.hostname ?? f.hostname, ...(p.mac || f.mac ? { mac: p.mac ?? f.mac! } : {}) };

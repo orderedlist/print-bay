@@ -11,6 +11,7 @@ import { gcodePath, getJob, hexFor, isMaterial, isStale, type Material } from ".
 import * as moonraker from "./moonraker.js";
 import { printer, refresh } from "./printers.js";
 import { slice } from "./slice.js";
+import { getNozzle } from "./nozzle.js";
 
 const MAX_COLOR_DISTANCE = 120;
 const SAME_COLOR = 20; // closer than this, two spools are the same colour and a colour alone can't pick between them
@@ -36,16 +37,21 @@ interface QueueState { active: Record<string, QueueEntry>; entries: QueueEntry[]
 const QUEUE_FILE = path.join(CACHE, "queue.json");
 let state: QueueState = load();
 
-/** The queue, kept from before there could be several printers: it all belonged to the first. */
+/**
+ * The queue as saved. Print Bay 0.3 kept `running`, a list of what each printer last started, with
+ * copies tagged by the printer's name or address (its id here); before that, `active` and untagged
+ * copies were all the first printer's.
+ */
 function load(): QueueState {
   if (!fs.existsSync(QUEUE_FILE)) return { active: {}, entries: [] };
-  const saved = JSON.parse(fs.readFileSync(QUEUE_FILE, "utf8")) as { active: unknown; entries: QueueEntry[] };
-  const first = PRINTERS[0]?.id ?? "k2";
+  const saved = JSON.parse(fs.readFileSync(QUEUE_FILE, "utf8")) as { active?: unknown; running?: QueueEntry[]; entries?: QueueEntry[] };
+  const first = PRINTERS[0]?.id ?? "";
   const old = (e: QueueEntry): QueueEntry => (e.printer ? e : { ...e, printer: first });
-  const active = !saved.active ? {}
+  const active: Record<string, QueueEntry> = saved.running ? Object.fromEntries(saved.running.map(old).map((e) => [e.printer, e]))
+    : !saved.active ? {}
     : "filename" in (saved.active as object) ? { [first]: old(saved.active as QueueEntry) }
     : saved.active as Record<string, QueueEntry>;
-  return { active, entries: saved.entries.map(old) };
+  return { active, entries: (saved.entries ?? []).map(old) };
 }
 
 function save() {
@@ -140,9 +146,14 @@ export async function print(opts: {
   if (opts.startNow && !moonraker.IDLE_STATES.has(status.state))
     throw fail(`${target.name} is ${status.state}; add it to the queue instead`, 409);
 
-  if (isStale(job, perPlate, material, oneColor)) await slice(job.name, perPlate, material, oneColor);
-  const file = forSlots(gcodePath(job.name, perPlate, material, undefined, oneColor), feeds);
-  await moonraker.upload(target.host, file);
+  const nozzle = getNozzle(target.id); // sliced for the nozzle on the printer it's going to
+  if (isStale(job, perPlate, material, oneColor, nozzle)) await slice(job.name, perPlate, material, oneColor, nozzle);
+  const file = forSlots(gcodePath(job.name, perPlate, material, nozzle, oneColor), feeds);
+  // slicing can take a while: check it's still that printer at that address before sending
+  const now = await refresh(target.id);
+  if (!now.online) throw fail(`Can't reach ${target.name} now`, 503);
+  if (opts.startNow && !moonraker.IDLE_STATES.has(now.state)) throw fail(`${target.name} is ${now.state} now; add it to the queue instead`, 409);
+  await moonraker.upload(printer(target.id).host, file);
 
   const entries = Array.from({ length: copies }, (_, i): QueueEntry => ({
     id: randomUUID(), printer: target.id, job: job.name, color: oneColor ? colors[0] : colors.join(" + "), hex: slot.color,

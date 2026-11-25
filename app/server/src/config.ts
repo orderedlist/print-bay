@@ -57,15 +57,51 @@ export const HOST = process.env.BIND ?? "0.0.0.0"; // LAN, so a phone can use it
 export const SETTINGS_FILE = path.join(DATA, "settings.json");
 export type ToolName = "orca" | "openscad" | "claude" | "git" | "nurb";
 /**
- * A printer this computer prints to. `mac` (its Wi-Fi card) and `hostname` (what it calls itself, K2-360F)
- * don't change when the router hands it a new address: they find the printer again when it moves.
+ * A printer this computer prints to. `name` is what you call it; `mac` (its Wi-Fi card) and
+ * `hostname` (what it calls itself, K2-360F) don't change when the router hands it a new address:
+ * they find the printer again when it moves (printers.ts).
  */
 export interface PrinterConfig { id: string; name: string; host: string; hostname?: string; mac?: string }
+
+/**
+ * A printer as settings.json keeps it. `name` is what the printer calls itself, as Print Bay 0.3
+ * saved it (0.3 uses one printer at a time: `printer`, the address of the one in use); `label`,
+ * `id` and `mac` came after. Kept this way so 0.3 sharing the library still reads it.
+ */
+export interface SavedPrinter { host: string; name?: string; id?: string; label?: string; mac?: string; hostname?: string }
 export interface Settings {
-  printers?: PrinterConfig[];
-  printer?: string; // before there could be several: the one printer's address
+  printers?: SavedPrinter[];
+  printer?: string; // 0.3: the one in use; before that, the only one
   tools?: Partial<Record<ToolName, string>>;
   setupDone?: boolean;
+}
+
+const bareHost = (host: string) => host.replace(/:7125$/, "");
+
+/**
+ * The saved printers as the app uses them. A printer from 0.3 has no id or label: its id is what
+ * 0.3 kept its queue and nozzle under (its name, else its address), and it's called by its name.
+ */
+export function savedPrinters(s: Settings): PrinterConfig[] {
+  const list = [...(s.printers ?? [])];
+  if (s.printer && !list.some((p) => p.host === s.printer)) list.unshift({ host: s.printer });
+  return list.map((p) => {
+    // saved by a development build between 0.3 and this: `name` was the label, `hostname` the printer's own name
+    const dev = p.id !== undefined && p.label === undefined;
+    const hostname = dev ? p.hostname : p.name;
+    const c: PrinterConfig = { id: p.id ?? p.name ?? p.host, name: (dev ? p.name : p.label) ?? hostname ?? bareHost(p.host), host: p.host };
+    if (hostname) c.hostname = hostname;
+    if (p.mac) c.mac = p.mac;
+    return c;
+  });
+}
+
+/** The printers as settings.json keeps them, readable by 0.3 (which uses `printer`, here the first). */
+export function toSaved(list: PrinterConfig[]): Pick<Settings, "printer" | "printers"> {
+  return {
+    printer: list[0]?.host,
+    printers: list.map((p) => ({ id: p.id, host: p.host, label: p.name, ...(p.hostname ? { name: p.hostname } : {}), ...(p.mac ? { mac: p.mac } : {}) })),
+  };
 }
 
 export function readSettings(): Settings {
@@ -122,10 +158,9 @@ export function resolveTool(name: ToolName, settings = readSettings()): { path: 
 
 /** The printers and why: K2_HOST in the environment (one printer), settings.json, or the address a checkout always used. */
 export function resolvePrinters(settings = readSettings()): { printers: PrinterConfig[]; source: Source } {
-  const one = (host: string): PrinterConfig[] => [{ id: "k2", name: "K2", host }];
+  const one = (host: string): PrinterConfig[] => [{ id: host, name: "K2", host }];
   if (ENV0.K2_HOST) return { printers: one(ENV0.K2_HOST), source: "env" };
-  if (settings.printers) return { printers: settings.printers, source: "settings" };
-  if (settings.printer) return { printers: one(settings.printer), source: "settings" };
+  if (settings.printers || settings.printer) return { printers: savedPrinters(settings), source: "settings" };
   // no guess for anyone else: Setup scans the network for printers
   return { printers: LEGACY_PRINTER ? one(LEGACY_PRINTER) : [], source: LEGACY_PRINTER ? "default" : "missing" };
 }
@@ -187,5 +222,16 @@ export const TOOL_BIN = (() => {
   return bin;
 })();
 
+/** Settings saved by a development build between 0.3 and this one: put them in the shape 0.3 reads too. */
+function upgradeSettings(): void {
+  const s = readSettings();
+  if (!s.printers?.some((p) => p.id !== undefined && p.label === undefined)) return;
+  const { printer } = s;
+  Object.assign(s, toSaved(savedPrinters(s)));
+  if (printer) s.printer = printer;
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(s, null, 2) + "\n");
+}
+
 seedLibrary();
+upgradeSettings();
 applySettings();

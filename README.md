@@ -208,8 +208,15 @@ from then on:
 - **Printer:** **Scan network** finds printers by asking every address on the
   Mac's local network for Moonraker (port 7125; a few seconds), K2s first,
   and runs by itself while no printer is set. Or type the address and Test
-  it. The K2 doesn't advertise itself over Bonjour, so give it a fixed
-  address in your router.
+  it. Add as many printers as you have and name each one; the scan shows the
+  spools each has loaded, to tell them apart. Every printer is watched at
+  once: the Printer tab lists them, and the model's Print box picks which one
+  a print goes to. Each keeps its own queue and nozzle size. Print Bay
+  remembers each printer's MAC address and the name it gives itself
+  (K2-9952): when one stops answering, it scans for it and follows it to its
+  new address, and it checks the printer at an address is still the right one
+  (two printers can swap addresses after a power cut). A fixed address in your
+  router skips the hunt.
 - **Library:** where it is. While it's empty, you can give the remote of a
   library pushed from another computer and it copies that instead.
 - **Programs:** OrcaSlicer (needed to slice), plus OpenSCAD, Claude Code, Git

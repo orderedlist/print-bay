@@ -8,7 +8,7 @@ import { DATA, HOST, normalizeHost, PORT, WEB_DIST } from "./config.js";
 import { bus, publish } from "./events.js";
 import { getJob, getModel, isMaterial, listJobs, listModels, rates, scadParams, setScadParams, writePlate } from "./jobs.js";
 import { meshFor } from "./mesh.js";
-import { isNozzle, setNozzle, getNozzle } from "./nozzle.js";
+import { isNozzle, setNozzle, getNozzle, type Nozzle } from "./nozzle.js";
 import { checkModel } from "./modelchecks.js";
 import { toolpathsFor } from "./gcode.js";
 import * as moonraker from "./moonraker.js";
@@ -70,13 +70,16 @@ export async function start(opts: StartOptions = {}) {
   });
 
   // ---- printers ----
+  /** Slices are per nozzle: the nozzle on the printer a request is for (by id; the stock one when none, or it's gone). */
+  const nozzleFor = (id: string | undefined): Nozzle => getNozzle(id && printers.view().some((p) => p.id === id) ? id : null);
   app.get("/api/printers", async () => printers.view());
-  app.get("/api/printer", async () => ({ nozzle: getNozzle() })); // one nozzle setting, for slicing
-  app.put<{ Body: { nozzle?: string } }>("/api/printer/nozzle", async (req, reply) => {
+  // each printer has its own nozzle; the printer doesn't report a swap, so it's set here
+  app.put<{ Params: { id: string }; Body: { nozzle?: string } }>("/api/printers/:id/nozzle", async (req, reply) => {
     const nozzle = req.body?.nozzle;
     if (!isNozzle(nozzle)) return reply.status(400).send({ error: `Unknown nozzle "${nozzle}"` });
-    setNozzle(nozzle);
-    publish("models", null); // every job's slice and stats are for the nozzle now set
+    setNozzle(printers.printer(req.params.id).id, nozzle);
+    publish("printers", printers.view());
+    publish("models", null); // its slices and stats are for the nozzle now set
     return { nozzle };
   });
   for (const action of ["pause", "resume", "cancel"] as const) {
@@ -88,8 +91,8 @@ export async function start(opts: StartOptions = {}) {
 
   // ---- models and jobs ----
   app.get("/api/rates", async () => rates());
-  app.get("/api/models", async () =>
-    listModels().map((m) => ({ ...m, jobs: m.jobs.map((j) => ({ ...j, slicing: isSlicing(j.name) })) })));
+  app.get<{ Querystring: { printer?: string } }>("/api/models", async (req) =>
+    listModels(nozzleFor(req.query.printer)).map((m) => ({ ...m, jobs: m.jobs.map((j) => ({ ...j, slicing: isSlicing(j.name) })) })));
   app.get<{ Params: { id: string }; Querystring: { job?: string } }>("/api/models/:id/mesh", async (req, reply) => {
     const file = await meshFor(req.params.id, { job: req.query.job });
     return reply.type("model/stl").header("Cache-Control", "no-store").send(fs.createReadStream(file));
@@ -99,11 +102,11 @@ export async function start(opts: StartOptions = {}) {
     return reply.type("model/stl").header("Cache-Control", "no-store").send(fs.createReadStream(file));
   });
   app.get<{ Params: { id: string }; Querystring: { job?: string } }>("/api/models/:id/checks", async (req) => checkModel(req.params.id, req.query.job));
-  app.get<{ Params: { job: string }; Querystring: { perPlate?: string; material?: string; oneColor?: string } }>("/api/jobs/:job/toolpaths", async (req, reply) => {
+  app.get<{ Params: { job: string }; Querystring: { perPlate?: string; material?: string; oneColor?: string; printer?: string } }>("/api/jobs/:job/toolpaths", async (req, reply) => {
     const { perPlate, material = "pla", oneColor } = req.query;
     if (!isMaterial(material)) return reply.status(400).send({ error: `Unknown material "${material}"` });
     const n = Math.max(1, Math.min(400, Math.floor(Number(perPlate ?? 1)) || 1));
-    const body = toolpathsFor(getJob(req.params.job).name, n, material, oneColor === "1");
+    const body = toolpathsFor(getJob(req.params.job).name, n, material, oneColor === "1", nozzleFor(req.query.printer));
     if (!body) return reply.status(404).send({ error: "Not sliced yet" });
     return reply.type("application/octet-stream").send(body);
   });
@@ -114,12 +117,12 @@ export async function start(opts: StartOptions = {}) {
     publish("models", null);
     return scadParams(getJob(job.name));
   });
-  app.post<{ Params: { job: string }; Body: { perPlate?: number; material?: string; oneColor?: boolean } | undefined }>("/api/jobs/:job/slice", async (req, reply) => {
+  app.post<{ Params: { job: string }; Body: { perPlate?: number; material?: string; oneColor?: boolean; printer?: string } | undefined }>("/api/jobs/:job/slice", async (req, reply) => {
     const job = getJob(req.params.job);
     const material = req.body?.material ?? "pla";
     if (!isMaterial(material)) return reply.status(400).send({ error: `Unknown material "${material}"` });
     if (job.plate && (req.body?.perPlate ?? 1) > 1) return reply.status(400).send({ error: "A plate is laid out already; print more of it as copies" });
-    slice(job.name, Math.max(1, Math.floor(req.body?.perPlate ?? 1)), material, !!req.body?.oneColor && job.parts.length > 1).catch(() => {}); // progress and failure arrive over SSE
+    slice(job.name, Math.max(1, Math.floor(req.body?.perPlate ?? 1)), material, !!req.body?.oneColor && job.parts.length > 1, nozzleFor(req.body?.printer)).catch(() => {}); // progress and failure arrive over SSE
     return reply.status(202).send({ ok: true });
   });
 

@@ -298,7 +298,10 @@ select.field { padding: 0 8px; }
   content: "Drop photos or SVGs"; position: absolute; inset: 8px; border: 2px dashed var(--acc); border-radius: 12px;
   display: grid; place-items: center; background: color-mix(in srgb, var(--panel) 88%, transparent); color: var(--acc); font-weight: 600;
 }
-.agent-log { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--line); }
+.agent-log {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--line);
+  overflow-wrap: anywhere; /* a long URL breaks instead of widening the panel */
+}
 .agent-user {
   align-self: flex-end; max-width: 88%; background: var(--field); border-radius: 14px 14px 4px 14px; padding: 8px 12px;
   white-space: pre-wrap; display: flex; flex-direction: column; gap: 8px;
@@ -321,7 +324,7 @@ select.field { padding: 0 8px; }
 .agent-compose { border-top: 1px solid var(--line); padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 8px; }
 .composer { display: flex; align-items: flex-end; gap: 6px; background: var(--panel2); border-radius: 12px; padding: 8px 8px 8px 12px; }
 .composer:focus-within { box-shadow: 0 0 0 2px var(--acc); }
-.composer textarea { flex-grow: 1; resize: none; border: 0; background: none; outline: 0; line-height: 1.4; padding: 4px 0; max-height: 200px; }
+.composer textarea { flex-grow: 1; resize: none; border: 0; background: none; outline: 0; line-height: 1.4; padding: 4px 0; max-height: 40vh; overflow-y: auto; }
 .agent-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .link-btn { border: 0; background: none; padding: 2px 4px; color: var(--muted); cursor: pointer; font-size: 12px; border-radius: 6px; }
 .link-btn:disabled { opacity: 0.4; cursor: default; }
@@ -356,7 +359,10 @@ select.field { padding: 0 8px; }
 }
 
 /* a multi-part model's part picker, under its title */
-.parts { display: grid; gap: 6px; margin-top: 10px; }
+.parts { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-top: 10px; }
 .parts-row { display: grid; grid-template-columns: 52px 1fr; align-items: center; gap: 8px; font-size: 12px; }
 .parts-row .seg button { flex: 1; min-width: 0; padding: 0 4px; gap: 5px; }
+.seg-col { flex-direction: column; }
+.seg-col button { justify-content: flex-start; padding: 0 10px; min-width: 0; }
+.seg-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .swatch { width: 8px; height: 8px; border-radius: 50%; flex: none; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.25); }

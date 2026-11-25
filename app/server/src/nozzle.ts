@@ -1,8 +1,8 @@
-// The nozzle on the K2. Klipper's config always says 0.4 and Creality doesn't report a swap,
+// The nozzle on each printer. Klipper's config always says 0.4 and Creality doesn't report a swap,
 // so it's set in the app and remembered here; slicing and printing use it (see NOZZLE_PROFILES, which slicer.ts swaps in).
 import fs from "node:fs";
 import path from "node:path";
-import { CACHE } from "./config.js";
+import { CACHE, PRINTERS } from "./config.js";
 
 export const NOZZLES = ["0.4", "0.6"] as const;
 export type Nozzle = (typeof NOZZLES)[number];
@@ -14,19 +14,25 @@ export const NOZZLE_PROFILES: Record<Nozzle, string[]> = {
 };
 export const isNozzle = (n: unknown): n is Nozzle => NOZZLES.includes(n as Nozzle);
 
+// { printers: { <printer id>: nozzle } }: 0.3 kept them by the printer's name (or address), which is
+// the id it has here (config.ts savedPrinters). A file from before there could be several printers
+// holds just { nozzle }: it was the first printer's.
 const FILE = path.join(CACHE, "printer.json");
-let current: Nozzle = (() => {
+interface Saved { nozzle?: string; printers?: Record<string, string> }
+let saved: Record<string, string> = (() => {
   try {
-    const saved = JSON.parse(fs.readFileSync(FILE, "utf8")).nozzle;
-    return isNozzle(saved) ? saved : STOCK;
-  } catch {
-    return STOCK;
-  }
+    const file = JSON.parse(fs.readFileSync(FILE, "utf8")) as Saved;
+    return file.printers ?? (file.nozzle && PRINTERS[0] ? { [PRINTERS[0].id]: file.nozzle } : {});
+  } catch { return {}; }
 })();
 
-export const getNozzle = () => current;
+/** The nozzle on a printer (by id); the stock one when it's never been set, or for no printer. */
+export function getNozzle(printer: string | null | undefined): Nozzle {
+  const n = printer ? saved[printer] : undefined;
+  return isNozzle(n) ? n : STOCK;
+}
 
-export function setNozzle(n: Nozzle) {
-  current = n;
-  fs.writeFileSync(FILE, JSON.stringify({ nozzle: n }, null, 2));
+export function setNozzle(printer: string, n: Nozzle) {
+  saved = { ...saved, [printer]: n };
+  fs.writeFileSync(FILE, JSON.stringify({ printers: saved }, null, 2));
 }

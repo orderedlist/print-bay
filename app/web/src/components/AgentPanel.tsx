@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api, money } from "../api";
 import type { AgentEntry, AgentSession } from "../types";
 
@@ -56,6 +56,23 @@ export function AgentPanel({ session, placeholder, allowUploads, empty, starters
   const scroller = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
+  // the box grows with what's typed (and rewraps with the panel), up to its max-height, then scrolls;
+  // a chat read to the bottom stays at the bottom as the box takes room from it
+  const following = useRef(true); // read to the bottom, as of the last scroll (a reflow doesn't change it)
+  const fit = () => {
+    const el = input.current, log = scroller.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+    if (log && following.current) log.scrollTop = log.scrollHeight;
+  };
+  useLayoutEffect(fit, [text]);
+  useEffect(() => {
+    let width = input.current?.clientWidth;
+    const watch = new ResizeObserver(([e]) => { if (e.contentRect.width !== width) { width = e.contentRect.width; fit(); } });
+    if (input.current) watch.observe(input.current);
+    return () => watch.disconnect();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const base = `/api/agent/${session.id}`;
 
   useEffect(() => { // follow the conversation
@@ -92,7 +109,8 @@ export function AgentPanel({ session, placeholder, allowUploads, empty, starters
       onDragOver={allowUploads ? (e) => { e.preventDefault(); setDragging(true); } : undefined}
       onDragLeave={allowUploads ? () => setDragging(false) : undefined}
       onDrop={allowUploads ? (e) => { e.preventDefault(); setDragging(false); upload(e.dataTransfer.files); } : undefined}>
-      <div className="agent-log" ref={scroller} aria-live="polite">
+      <div className="agent-log" ref={scroller} aria-live="polite"
+        onScroll={(e) => { const l = e.currentTarget; following.current = l.scrollHeight - l.scrollTop - l.clientHeight < 4; }}>
         {session.transcript.length === 0 && empty}
         {session.transcript.map((entry, i) => {
           if (entry.role === "user") return (
