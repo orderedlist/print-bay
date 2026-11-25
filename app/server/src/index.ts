@@ -99,8 +99,11 @@ export async function start(opts: StartOptions = {}) {
     return reply.type("model/stl").header("Cache-Control", "no-store").send(fs.createReadStream(file));
   });
   app.get<{ Params: { id: string }; Querystring: { job?: string } }>("/api/models/:id/checks", async (req) => checkModel(req.params.id, req.query.job));
-  app.get<{ Params: { job: string } }>("/api/jobs/:job/toolpaths", async (req, reply) => {
-    const body = toolpathsFor(getJob(req.params.job).name);
+  app.get<{ Params: { job: string }; Querystring: { perPlate?: string; material?: string; oneColor?: string } }>("/api/jobs/:job/toolpaths", async (req, reply) => {
+    const { perPlate, material = "pla", oneColor } = req.query;
+    if (!isMaterial(material)) return reply.status(400).send({ error: `Unknown material "${material}"` });
+    const n = Math.max(1, Math.min(400, Math.floor(Number(perPlate ?? 1)) || 1));
+    const body = toolpathsFor(getJob(req.params.job).name, n, material, oneColor === "1");
     if (!body) return reply.status(404).send({ error: "Not sliced yet" });
     return reply.type("application/octet-stream").send(body);
   });

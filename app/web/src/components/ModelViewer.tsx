@@ -4,7 +4,7 @@ import { api } from "../api";
 import { FEATURE_COLORS, Stage, parseMesh, type Toolpaths } from "../stage";
 import type { Theme } from "../theme";
 import { StressPanel } from "./StressPanel";
-import type { CheckReport, Model, ModelJob } from "../types";
+import type { CheckReport, Material, Model, ModelJob } from "../types";
 
 export const SEVERITY_COLORS = { fail: "#e5484d", warn: "#f2a33a", info: "#3d8bfd" } as const;
 
@@ -27,10 +27,14 @@ interface Props {
   checks?: CheckReport | null;
   /** The filament colours picked for printing (one per part), to show the part in. */
   colors?: string[];
+  /** The slice the Print box is set to (n to a plate, material, one spool): the toolpaths shown are its. */
+  slice?: SliceChoice;
 }
 
+export interface SliceChoice { perPlate: number; material: Material; oneColor: boolean; slicedAt: number | null }
+
 /** The model on the full-window stage, plus the floating controls for the current view. */
-export function ModelViewer({ model, job: shown, mode, setMode, theme, shift, onSize, onAvailable, onStatus, checks, colors }: Props) {
+export function ModelViewer({ model, job: shown, mode, setMode, theme, shift, onSize, onAvailable, onStatus, checks, colors, slice }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [stage, setStage] = useState<Stage | null>(null);
   const [layoutReady, setLayoutReady] = useState(false);
@@ -48,7 +52,10 @@ export function ModelViewer({ model, job: shown, mode, setMode, theme, shift, on
   const jobQuery = meshJob ? `?job=${encodeURIComponent(meshJob.name)}` : "";
   // a plate's mesh changes with what's on it, not with the model's files
   const plateKey = meshJob?.plate ? JSON.stringify(meshJob.plate) : "";
-  const pathsKey = job ? `${job.name}:${job.stats!.slicedAt}` : null;
+  // the slice picked in the Print box, once there is one; a part picked that isn't sliced shows none
+  const pick = slice && (!shown || job === shown) ? slice : null;
+  const pathsKey = !job ? null : pick ? `${job.name}:${pick.perPlate}:${pick.material}:${pick.oneColor}:${pick.slicedAt}` : `${job.name}:${job.stats!.slicedAt}`;
+  const shownPlate = useRef(1); // the plate count last brought into view
 
   useEffect(() => {
     const s = new Stage(host.current!);
@@ -83,10 +90,17 @@ export function ModelViewer({ model, job: shown, mode, setMode, theme, shift, on
   useEffect(() => {
     if (!stage) return;
     let alive = true;
-    if (!job) { stage.setToolpaths(null); setPaths(null); return; }
-    api<ArrayBuffer>(`/api/jobs/${job.name}/toolpaths`)
-      .then((buf) => alive && setPaths(stage.setToolpaths(buf)))
-      .catch(() => alive && setPaths(null));
+    if (!job || (pick && !pick.slicedAt)) { stage.setToolpaths(null); setPaths(null); return; } // not sliced that way yet
+    const q = pick ? `?perPlate=${pick.perPlate}&material=${pick.material}${pick.oneColor ? "&oneColor=1" : ""}` : "";
+    api<ArrayBuffer>(`/api/jobs/${job.name}/toolpaths${q}`)
+      .then((buf) => {
+        if (!alive) return;
+        setPaths(stage.setToolpaths(buf));
+        // several to a plate: show how they're laid out, once each time the count changes (the model view is one copy)
+        if (pick && pick.perPlate > 1 && pick.perPlate !== shownPlate.current) setMode("paths");
+        shownPlate.current = pick?.perPlate ?? 1;
+      })
+      .catch(() => { if (alive) { stage.setToolpaths(null); setPaths(null); } });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage, pathsKey]);

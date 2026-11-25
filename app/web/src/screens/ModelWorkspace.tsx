@@ -245,6 +245,8 @@ export function ModelWorkspace({ model, live, printer, pickPrinter, caps, tab, s
   useEffect(() => { if (perPlate > fit) setPerPlate(fit); }, [fit]); // eslint-disable-line react-hooks/exhaustive-deps
   const plate = perPlate > 1 ? job?.plates.find((p) => p.perPlate === perPlate) : undefined;
   const exact = perPlate === 1 ? sliced?.stats : plate && !plate.stale ? plate.stats : null;
+  // the viewer's toolpaths: this slice's, once it's sliced (several to a plate slice as PLA, as printing does)
+  const sliceChoice = { perPlate, material, oneColor, slicedAt: (perPlate > 1 ? plate?.stats : sliced?.stats)?.slicedAt ?? null };
   // until this plate is sliced, draw a line through the nearest counts that are: plates share
   // travel and colour swaps, so one copy times n would overestimate badly
   const stats = exact ?? (job?.stats && perPlate > 1 ? interpolate(perPlate, [
@@ -304,7 +306,7 @@ export function ModelWorkspace({ model, live, printer, pickPrinter, caps, tab, s
     <>
       {drawn ? (
         <ModelViewer model={model} job={job} mode={mode} setMode={setMode} theme={theme} shift={shift}
-          onSize={setSize} onAvailable={setAvailable} checks={checks}
+          onSize={setSize} onAvailable={setAvailable} checks={checks} slice={sliceChoice}
           colors={colorways.map((c, i) => chosenAll[i]?.color ?? c.hex ?? "").filter(Boolean)} />
       ) : (
         <div className="stage-hint">

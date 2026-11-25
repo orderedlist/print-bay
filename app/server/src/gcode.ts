@@ -6,7 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CACHE } from "./config.js";
-import { gcodePath } from "./jobs.js";
+import { gcodePath, type Material } from "./jobs.js";
 
 const AXIS = /([XYZE])(-?[\d.]+)/g;
 
@@ -54,8 +54,9 @@ function parse(text: string) {
   return { segs, layerOf, layers };
 }
 
-export function toolpathsFor(job: string): Buffer | null {
-  const gcode = gcodePath(job);
+/** The toolpaths of one of a job's slices: n to a plate, for a material, all on one spool (see gcodePath). */
+export function toolpathsFor(job: string, perPlate = 1, material: Material = "pla", oneColor = false): Buffer | null {
+  const gcode = gcodePath(job, perPlate, material, undefined, oneColor);
   if (!fs.existsSync(gcode)) return null;
   const dest = path.join(CACHE, `${path.basename(gcode, ".gcode")}.paths`); // per G-code file: one per nozzle
   if (fs.existsSync(dest) && fs.statSync(dest).mtimeMs >= fs.statSync(gcode).mtimeMs) return fs.readFileSync(dest);
