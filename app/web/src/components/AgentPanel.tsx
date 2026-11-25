@@ -58,13 +58,13 @@ export function AgentPanel({ session, placeholder, allowUploads, empty, starters
   const input = useRef<HTMLTextAreaElement>(null);
   // the box grows with what's typed (and rewraps with the panel), up to its max-height, then scrolls;
   // a chat read to the bottom stays at the bottom as the box takes room from it
+  const following = useRef(true); // read to the bottom, as of the last scroll (a reflow doesn't change it)
   const fit = () => {
     const el = input.current, log = scroller.current;
     if (!el) return;
-    const atBottom = !!log && log.scrollHeight - log.scrollTop - log.clientHeight < 4;
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
-    if (log && atBottom) log.scrollTop = log.scrollHeight;
+    if (log && following.current) log.scrollTop = log.scrollHeight;
   };
   useLayoutEffect(fit, [text]);
   useEffect(() => {
@@ -109,7 +109,8 @@ export function AgentPanel({ session, placeholder, allowUploads, empty, starters
       onDragOver={allowUploads ? (e) => { e.preventDefault(); setDragging(true); } : undefined}
       onDragLeave={allowUploads ? () => setDragging(false) : undefined}
       onDrop={allowUploads ? (e) => { e.preventDefault(); setDragging(false); upload(e.dataTransfer.files); } : undefined}>
-      <div className="agent-log" ref={scroller} aria-live="polite">
+      <div className="agent-log" ref={scroller} aria-live="polite"
+        onScroll={(e) => { const l = e.currentTarget; following.current = l.scrollHeight - l.scrollTop - l.clientHeight < 4; }}>
         {session.transcript.length === 0 && empty}
         {session.transcript.map((entry, i) => {
           if (entry.role === "user") return (
