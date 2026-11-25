@@ -56,13 +56,23 @@ export function AgentPanel({ session, placeholder, allowUploads, empty, starters
   const scroller = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
-  // the box grows with what's typed, up to its max-height (then it scrolls)
-  useLayoutEffect(() => {
-    const el = input.current;
+  // the box grows with what's typed (and rewraps with the panel), up to its max-height, then scrolls;
+  // a chat read to the bottom stays at the bottom as the box takes room from it
+  const fit = () => {
+    const el = input.current, log = scroller.current;
     if (!el) return;
+    const atBottom = !!log && log.scrollHeight - log.scrollTop - log.clientHeight < 4;
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
-  }, [text]);
+    if (log && atBottom) log.scrollTop = log.scrollHeight;
+  };
+  useLayoutEffect(fit, [text]);
+  useEffect(() => {
+    let width = input.current?.clientWidth;
+    const watch = new ResizeObserver(([e]) => { if (e.contentRect.width !== width) { width = e.contentRect.width; fit(); } });
+    if (input.current) watch.observe(input.current);
+    return () => watch.disconnect();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const base = `/api/agent/${session.id}`;
 
   useEffect(() => { // follow the conversation
