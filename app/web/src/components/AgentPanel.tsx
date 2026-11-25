@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api, money } from "../api";
 import type { AgentEntry, AgentSession } from "../types";
 
@@ -56,6 +56,13 @@ export function AgentPanel({ session, placeholder, allowUploads, empty, starters
   const scroller = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
+  // the box grows with what's typed, up to its max-height (then it scrolls)
+  useLayoutEffect(() => {
+    const el = input.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [text]);
   const base = `/api/agent/${session.id}`;
 
   useEffect(() => { // follow the conversation
