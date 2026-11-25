@@ -349,19 +349,18 @@ export function ModelWorkspace({ model, live, caps, tab, setTab, theme, toggleTh
           </div>
           {partGroups && (
             <div className="parts" role="radiogroup" aria-label="Part to print">
-              {partGroups.map((g) => (
-                <div key={g.name} className="parts-row">
-                  <span className="faint">{g.name}</span>
-                  <div className="seg seg-sm">
-                    {g.jobs.map(({ job: j, short }) => (
-                      <button key={j.name} role="radio" aria-checked={j.name === job?.name} aria-label={j.label ?? j.name}
-                        title={j.stats ? `${j.label} · ${j.stats.time}` : `${j.label} · not sliced`} onClick={() => setJobName(j.name)}>
-                        {j.hex && <span className="swatch" style={{ background: j.hex }} />}{short}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
+              {partGroups.map((g) => {
+                const buttons = g.jobs.map(({ job: j, short }) => (
+                  <button key={j.name} role="radio" aria-checked={j.name === job?.name} aria-label={j.label ?? j.name}
+                    title={j.stats ? `${j.label} · ${j.stats.time}` : `${j.label} · not sliced`} onClick={() => setJobName(j.name)}>
+                    {j.hex && <span className="swatch" style={{ background: j.hex }} />}<span className="seg-text">{short}</span>
+                  </button>
+                ));
+                // named ones (no number to group them by) each get a line of their own
+                return g.name === null
+                  ? <div key={g.jobs[0].job.name} className="seg seg-sm seg-col">{buttons}</div>
+                  : <div key={g.name} className="parts-row"><span className="faint">{g.name}</span><div className="seg seg-sm">{buttons}</div></div>;
+              })}
               {plateParts.length > 1 && (
                 <button className="cta cta-sm" style={{ justifySelf: "start", height: 28 }} disabled={plateBusy} onClick={newPlate}
                   title="Print several parts at once, laid out on one bed">+ New plate</button>
@@ -671,7 +670,12 @@ function nearest(hex: string | null, slots: { slot: string; color: string }[]): 
  * A multi-part model's picker: its labelled jobs grouped by the words before the number
  * ("Plant 1".."Plant 6" -> Plant: 1..6; "Funnel" on its own). Null for a one-job model.
  */
-function pickerGroups(jobs: Model["jobs"]): { name: string; jobs: { job: Model["jobs"][number]; short: string }[] }[] | null {
+/**
+ * The picker for a model with several parts or plates. Numbered labels (Ring 1, Ring 2) share a
+ * row under their name; the rest (Names 1-4: Archer, Amor…) are listed one to a line, and
+ * neighbours share one list. Parts first, then the plates that hold them.
+ */
+function pickerGroups(jobs: Model["jobs"]): { name: string | null; jobs: { job: Model["jobs"][number]; short: string }[] }[] | null {
   const labelled = jobs.filter((j) => j.label);
   if (labelled.length < 2) return null;
   const groups = new Map<string, { job: Model["jobs"][number]; short: string }[]>();
@@ -680,6 +684,12 @@ function pickerGroups(jobs: Model["jobs"]): { name: string; jobs: { job: Model["
     const [name, short] = m ? [m[1], m[2]] : [job.label!, job.label!];
     groups.set(name, [...(groups.get(name) ?? []), { job, short }]);
   }
-  return [...groups].map(([name, js]) => ({ name, jobs: js }))
-    .sort((a, b) => Number(!!a.jobs[0].job.plate) - Number(!!b.jobs[0].job.plate)); // plates after the parts they hold
+  const sorted = [...groups].map(([name, js]) => ({ name: js.length === 1 && js[0].short === name ? null : name, jobs: js }))
+    .sort((a, b) => Number(!!a.jobs[0].job.plate) - Number(!!b.jobs[0].job.plate));
+  return sorted.reduce<typeof sorted>((out, g) => {
+    const last = out[out.length - 1];
+    if (g.name === null && last?.name === null && !!last.jobs[0].job.plate === !!g.jobs[0].job.plate) last.jobs.push(...g.jobs);
+    else out.push(g);
+    return out;
+  }, []);
 }
