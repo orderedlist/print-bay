@@ -8,6 +8,7 @@ import { DATA, HOST, normalizeHost, PORT, WEB_DIST } from "./config.js";
 import { bus, publish } from "./events.js";
 import { getJob, getModel, isMaterial, listJobs, listModels, rates, scadParams, setScadParams, writePlate } from "./jobs.js";
 import { meshFor } from "./mesh.js";
+import { findThumb, saveThumb } from "./thumbs.js";
 import { isNozzle, setNozzle, getNozzle, type Nozzle } from "./nozzle.js";
 import { checkModel } from "./modelchecks.js";
 import { toolpathsFor } from "./gcode.js";
@@ -96,6 +97,16 @@ export async function start(opts: StartOptions = {}) {
   app.get<{ Params: { id: string }; Querystring: { job?: string } }>("/api/models/:id/mesh", async (req, reply) => {
     const file = await meshFor(req.params.id, { job: req.query.job });
     return reply.type("model/stl").header("Cache-Control", "no-store").send(fs.createReadStream(file));
+  });
+  // the hash names everything the picture depends on, so a saved preview never goes stale
+  app.get<{ Params: { id: string; hash: string } }>("/api/models/:id/thumb/:hash", async (req, reply) => {
+    const thumb = findThumb(req.params.id, req.params.hash);
+    if (!thumb) return reply.status(404).send({ error: "No preview yet" });
+    return reply.type(thumb.type).header("Cache-Control", "public, max-age=31536000, immutable").send(fs.createReadStream(thumb.file));
+  });
+  app.put<{ Params: { id: string; hash: string }; Body: Buffer }>("/api/models/:id/thumb/:hash", async (req, reply) => {
+    saveThumb(req.params.id, req.params.hash, String(req.headers["content-type"]).split(";")[0], req.body);
+    return reply.status(204).send();
   });
   app.get<{ Params: { id: string }; Querystring: { job?: string } }>("/api/models/:id/print-mesh", async (req, reply) => {
     const file = await meshFor(req.params.id, { print: true, job: req.query.job });

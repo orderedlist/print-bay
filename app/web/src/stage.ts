@@ -399,15 +399,36 @@ export class Stage {
   }
 }
 
-// ---- thumbnails: one shared offscreen renderer ----
+// ---- thumbnails: one shared offscreen renderer, the pictures kept on the server ----
 
 let thumbRenderer: THREE.WebGLRenderer | null = null;
-const thumbs = new Map<string, Promise<{ url: string; size: THREE.Vector3 }>>();
+const thumbs = new Map<string, Promise<string>>();
+const THUMB_LOOK = 1; // bump when the camera, lights or size below change, so saved previews are redrawn
 
-export function thumbnail(key: string, meshUrl: string, hex: string | null, partHexes: string[] = []) {
-  if (!thumbs.has(key)) {
-    thumbs.set(key, (async () => {
-      const res = await fetch(meshUrl);
+/** A short, stable name for everything a preview depends on (FNV-1a, two seeds for 64 bits). */
+function thumbHash(text: string): string {
+  let a = 0x811c9dc5, b = 0x01000193 ^ 0x9e3779b9;
+  for (let i = 0; i < text.length; i++) {
+    a = Math.imul(a ^ text.charCodeAt(i), 0x01000193);
+    b = Math.imul(b ^ text.charCodeAt(i), 0x01000193);
+  }
+  return (a >>> 0).toString(36) + (b >>> 0).toString(36);
+}
+
+/**
+ * A model's preview as an image URL. The server keeps each preview once a browser has drawn it,
+ * so a phone loads a small image instead of the mesh (some are 20 MB); a missing one is drawn
+ * here from the mesh and handed back for next time.
+ */
+export function thumbnail(modelId: string, meshKey: string, hex: string | null, partHexes: string[] = []) {
+  const hash = thumbHash(JSON.stringify([THUMB_LOOK, meshKey, hex, partHexes]));
+  if (!thumbs.has(hash)) {
+    thumbs.set(hash, (async () => {
+      const saved = `/api/models/${encodeURIComponent(modelId)}/thumb/${hash}`;
+      const kept = await fetch(saved).catch(() => null);
+      if (kept?.ok) return URL.createObjectURL(await kept.blob());
+
+      const res = await fetch(`/api/models/${encodeURIComponent(modelId)}/mesh`);
       if (!res.ok) throw new Error(await res.text());
       const { geometry, size } = parseMesh(await res.arrayBuffer(), partHexes);
       thumbRenderer ??= new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: true });
@@ -423,10 +444,13 @@ export function thumbnail(key: string, meshUrl: string, hex: string | null, part
       camera.position.set(-r * 1.5, -r * 2.0, size.z / 2 + r * 1.3);
       camera.lookAt(0, 0, size.z / 2);
       thumbRenderer.render(scene, camera);
-      const url = thumbRenderer.domElement.toDataURL("image/png");
       geometry.dispose();
-      return { url, size };
+      // WebP where the browser can write it (Safari gives back a PNG instead)
+      const blob = await new Promise<Blob | null>((done) => thumbRenderer!.domElement.toBlob(done, "image/webp", 0.9));
+      if (!blob) throw new Error("Couldn't draw the preview");
+      void fetch(saved, { method: "PUT", headers: { "Content-Type": blob.type }, body: blob }).catch(() => {});
+      return URL.createObjectURL(blob);
     })());
   }
-  return thumbs.get(key)!;
+  return thumbs.get(hash)!;
 }

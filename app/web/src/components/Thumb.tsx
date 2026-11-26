@@ -9,8 +9,8 @@ export function Thumb({ model }: { model: Model }) {
     let alive = true;
     setUrl(null);
     if (!model.file) return;
-    thumbnail(model.meshKey, `/api/models/${model.id}/mesh`, model.jobs[0]?.hex ?? null, model.jobs[0]?.parts.map((p) => p.hex))
-      .then((t) => alive && setUrl(t.url))
+    thumbnail(model.id, model.meshKey, model.jobs[0]?.hex ?? null, model.jobs[0]?.parts.map((p) => p.hex))
+      .then((u) => alive && setUrl(u))
       .catch(() => alive && setFailed(true));
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
