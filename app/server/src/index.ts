@@ -2,12 +2,14 @@
 // Exported as start() so the Electron shell can run it in-process.
 import fs from "node:fs";
 import path from "node:path";
-import Fastify from "fastify";
+import Fastify, { type FastifyReply } from "fastify";
 import fastifyStatic from "@fastify/static";
 import { DATA, HOST, normalizeHost, PORT, WEB_DIST } from "./config.js";
 import { bus, publish } from "./events.js";
 import { getJob, getModel, isMaterial, listJobs, listModels, rates, scadParams, setScadParams, writePlate } from "./jobs.js";
 import { meshFor } from "./mesh.js";
+import { findThumb, saveThumb } from "./thumbs.js";
+import { gzipped } from "./gzip.js";
 import { isNozzle, setNozzle, getNozzle, type Nozzle } from "./nozzle.js";
 import { checkModel } from "./modelchecks.js";
 import { toolpathsFor } from "./gcode.js";
@@ -90,16 +92,31 @@ export async function start(opts: StartOptions = {}) {
   }
 
   // ---- models and jobs ----
+  /** An STL, gzipped when the browser takes it (most are 3-10x smaller). */
+  async function sendMesh(accept: string | undefined, reply: FastifyReply, file: string) {
+    reply.type("model/stl").header("Cache-Control", "no-store").header("Vary", "Accept-Encoding");
+    if (!/\bgzip\b/.test(accept ?? "")) return reply.send(fs.createReadStream(file));
+    return reply.header("Content-Encoding", "gzip").send(fs.createReadStream(await gzipped(file)));
+  }
+
   app.get("/api/rates", async () => rates());
   app.get<{ Querystring: { printer?: string } }>("/api/models", async (req) =>
     listModels(nozzleFor(req.query.printer)).map((m) => ({ ...m, jobs: m.jobs.map((j) => ({ ...j, slicing: isSlicing(j.name) })) })));
   app.get<{ Params: { id: string }; Querystring: { job?: string } }>("/api/models/:id/mesh", async (req, reply) => {
-    const file = await meshFor(req.params.id, { job: req.query.job });
-    return reply.type("model/stl").header("Cache-Control", "no-store").send(fs.createReadStream(file));
+    return sendMesh(req.headers["accept-encoding"], reply, await meshFor(req.params.id, { job: req.query.job }));
+  });
+  // the hash names everything the picture depends on, so a saved preview never goes stale
+  app.get<{ Params: { id: string; hash: string } }>("/api/models/:id/thumb/:hash", async (req, reply) => {
+    const thumb = findThumb(req.params.id, req.params.hash);
+    if (!thumb) return reply.status(404).send({ error: "No preview yet" });
+    return reply.type(thumb.type).header("Cache-Control", "public, max-age=31536000, immutable").send(fs.createReadStream(thumb.file));
+  });
+  app.put<{ Params: { id: string; hash: string }; Body: Buffer }>("/api/models/:id/thumb/:hash", async (req, reply) => {
+    saveThumb(req.params.id, req.params.hash, String(req.headers["content-type"]).split(";")[0], req.body);
+    return reply.status(204).send();
   });
   app.get<{ Params: { id: string }; Querystring: { job?: string } }>("/api/models/:id/print-mesh", async (req, reply) => {
-    const file = await meshFor(req.params.id, { print: true, job: req.query.job });
-    return reply.type("model/stl").header("Cache-Control", "no-store").send(fs.createReadStream(file));
+    return sendMesh(req.headers["accept-encoding"], reply, await meshFor(req.params.id, { print: true, job: req.query.job }));
   });
   app.get<{ Params: { id: string }; Querystring: { job?: string } }>("/api/models/:id/checks", async (req) => checkModel(req.params.id, req.query.job));
   app.get<{ Params: { job: string }; Querystring: { perPlate?: string; material?: string; oneColor?: string; printer?: string } }>("/api/jobs/:job/toolpaths", async (req, reply) => {
