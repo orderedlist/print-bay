@@ -10,6 +10,7 @@ import { APP_ROOT, DATA, NURB_PYTHON, OPENSCAD, ORCA } from "./config.js";
 import { gcodePath, hexFor, MATERIAL_PROFILES, type Material } from "./jobs.js";
 import { NOZZLE_PROFILES, STOCK, type Nozzle } from "./nozzle.js";
 import * as parts3mf from "./parts3mf.js";
+import { threemfToStl } from "./mesh.js";
 
 type Log = (line: string) => void;
 
@@ -346,6 +347,13 @@ export function mergePlate(job: Toml, colors: string[], out: string, oneColor: b
 
 // ---- slicing ----
 
+/** A downloaded 3MF's shapes as an STL: the build as the file lays it out, or the job's one object. */
+function writeShapes(src: string, dest: string, job: Toml): string {
+  const tris = threemfToStl(src, dest, job.object, job.fill_base);
+  if (!tris.length) throw fail(`${rel(src)} has no printable objects`);
+  return dest;
+}
+
 /** Slice a job file (relative to the library, or absolute); `log` gets progress lines. Returns the G-code's path. */
 export async function sliceJob(file: string, o: SliceOptions, log: Log): Promise<string> {
   const job = loadJob(file);
@@ -396,8 +404,8 @@ export async function sliceJob(file: string, o: SliceOptions, log: Log): Promise
 
     // OpenSCAD and nurb models arrive centred and laid out as intended (see parts3mf); Orca's
     // auto-arrange would spin them, so it's off for those. Downloaded 3MFs keep Orca's placement.
-    const placed = String(job.model).endsWith(".scad") || String(job.model).endsWith(".py");
-    const args = [
+    let placed = String(job.model).endsWith(".scad") || String(job.model).endsWith(".py");
+    const args = () => [
       "--load-settings", `${p.machine};${processFile}`,
       "--load-filaments", filaments.join(";"),
       "--slice", String(plate),
@@ -415,7 +423,20 @@ export async function sliceJob(file: string, o: SliceOptions, log: Log): Promise
       const s = Math.round((Date.now() - started) / 1000);
       log(`Still slicing… ${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`);
     }, 15_000);
-    try { await run(ORCA, args, "OrcaSlicer"); } finally { clearInterval(ticker); }
+    try {
+      await run(ORCA, args(), "OrcaSlicer").catch(async (err) => {
+        // Orca's CLI rejects some downloaded 3MFs outright (Bambu Studio 2.7 files: "Unknown label
+        // object id!", or a crash). Their shapes still print: slice those as a plain 3MF, which
+        // leaves out the file's own per-object settings and modifiers.
+        if (ext !== ".3mf" || job.members) throw err;
+        log(`${String(err.message).split("\n").slice(1).join(" ").trim() || "OrcaSlicer couldn't read it"}`);
+        log("OrcaSlicer couldn't read this 3MF's project, so slicing its shapes as they are (without the file's own print settings)…");
+        model = parts3mf.write([[job.name, writeShapes(path.join(DATA, job.model), path.join(out, "shapes.stl"), job), 1]], path.join(out, "shapes.3mf"), job.name, 1);
+        [plate, placed] = [0, true];
+        for (const f of fs.readdirSync(out)) if (f.endsWith(".gcode")) fs.rmSync(path.join(out, f));
+        await run(ORCA, args(), "OrcaSlicer");
+      });
+    } finally { clearInterval(ticker); }
     const gcodes = fs.readdirSync(out).filter((f) => f.endsWith(".gcode"))
       .map((f) => path.join(out, f)).sort((a, b) => fs.statSync(a).mtimeMs - fs.statSync(b).mtimeMs);
     if (!gcodes.length) throw fail("OrcaSlicer finished but wrote no G-code.");
