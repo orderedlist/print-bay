@@ -91,6 +91,9 @@ export async function start(opts: StartOptions = {}) {
     });
   }
 
+  /** The X-File-Name header a browser sends with an upload, URI-encoded. */
+  const fileName = (h: unknown) => { try { return decodeURIComponent(String(h ?? "")); } catch { return ""; } };
+
   // ---- models and jobs ----
   /** An STL, gzipped when the browser takes it (most are 3-10x smaller). */
   async function sendMesh(accept: string | undefined, reply: FastifyReply, file: string) {
@@ -198,6 +201,7 @@ export async function start(opts: StartOptions = {}) {
 
   // ---- Claude agents ----
   app.addContentTypeParser(/^image\//, { parseAs: "buffer", bodyLimit: 15 * 1024 * 1024 }, (_req, body, done) => done(null, body));
+  app.addContentTypeParser("model/3mf", { parseAs: "buffer", bodyLimit: 200 * 1024 * 1024 }, (_req, body, done) => done(null, body));
   app.post<{ Body: { kind: "edit" | "new"; modelId?: string } }>("/api/agent", async (req) =>
     agent.createSession(req.body.kind === "new" ? "new" : "edit", req.body.modelId));
   app.get<{ Params: { id: string } }>("/api/agent/:id", async (req) => agent.getSession(req.params.id));
@@ -208,13 +212,13 @@ export async function start(opts: StartOptions = {}) {
   app.post<{ Params: { id: string } }>("/api/agent/:id/stop", async (req) => agent.stop(req.params.id));
   app.post<{ Params: { id: string } }>("/api/agent/:id/undo", async (req) => agent.undo(req.params.id));
   app.post<{ Params: { id: string }; Body: Buffer }>("/api/agent/:id/uploads", async (req) =>
-    ({ name: agent.saveUpload(req.params.id, String(req.headers["content-type"]), req.body) }));
+    ({ name: agent.saveUpload(req.params.id, String(req.headers["content-type"]), req.body, fileName(req.headers["x-file-name"])) }));
   app.get<{ Params: { id: string; name: string } }>("/api/agent/:id/uploads/:name", async (req, reply) => {
     const file = agent.uploadPath(req.params.id, req.params.name);
     const ext = path.extname(file).slice(1).replace("jpg", "jpeg").replace("svg", "svg+xml");
     // an uploaded SVG could carry script: never let it run if opened directly
     if (ext === "svg+xml") reply.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:");
-    return reply.type(`image/${ext}`).header("Cache-Control", "max-age=86400").send(fs.createReadStream(file));
+    return reply.type(ext === "3mf" ? "model/3mf" : `image/${ext}`).header("Cache-Control", "max-age=86400").send(fs.createReadStream(file));
   });
 
   // ---- setup and settings ----

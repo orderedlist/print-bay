@@ -48,6 +48,19 @@ interface Props {
   onNewChat?: () => void;
 }
 
+const is3mf = (upload: string) => upload.endsWith(".3mf");
+/** The name a 3MF was uploaded with (the server prefixes a time and an id). */
+const modelName = (upload: string) => upload.replace(/^\d+-[0-9a-f]{8}-/, "");
+
+function ModelChip({ name }: { name: string }) {
+  return (
+    <span className="agent-file" title={modelName(name)}>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M12 3 4 7.5v9L12 21l8-4.5v-9z" /><path d="m4 7.5 8 4.5 8-4.5M12 12v9" /></svg>
+      <span>{modelName(name)}</span>
+    </span>
+  );
+}
+
 export function AgentPanel({ session, placeholder, allowUploads, empty, starters, toast, onNewChat }: Props) {
   const [text, setText] = useState("");
   const [uploads, setUploads] = useState<string[]>([]);
@@ -82,10 +95,14 @@ export function AgentPanel({ session, placeholder, allowUploads, empty, starters
 
   const upload = async (files: Iterable<File>) => {
     for (const file of files) {
-      if (!file.type.startsWith("image/")) { toast(`${file.name} isn't a photo or an SVG`, true); continue; }
+      const model = /\.3mf$/i.test(file.name); // browsers rarely know a 3MF's type
+      if (!model && !file.type.startsWith("image/")) { toast(`${file.name} isn't a photo, an SVG or a 3MF`, true); continue; }
       setUploading((n) => n + 1);
       try {
-        const { name } = await api<{ name: string }>(`${base}/uploads`, { method: "POST", body: file, headers: { "Content-Type": file.type } });
+        const { name } = await api<{ name: string }>(`${base}/uploads`, {
+          method: "POST", body: file,
+          headers: { "Content-Type": model ? "model/3mf" : file.type, "X-File-Name": encodeURIComponent(file.name) },
+        });
         setUploads((u) => [...u, name]);
       } catch (e) { toast((e as Error).message, true); }
       setUploading((n) => n - 1);
@@ -116,7 +133,9 @@ export function AgentPanel({ session, placeholder, allowUploads, empty, starters
           if (entry.role === "user") return (
             <div key={i} className="agent-user">
               {entry.uploads.length > 0 && (
-                <div className="agent-photos">{entry.uploads.map((u) => <img key={u} src={`${base}/uploads/${u}`} alt={u.endsWith(".svg") ? "Attached drawing" : "Attached photo"} />)}</div>
+                <div className="agent-photos">{entry.uploads.map((u) => is3mf(u)
+                  ? <ModelChip key={u} name={u} />
+                  : <img key={u} src={`${base}/uploads/${u}`} alt={u.endsWith(".svg") ? "Attached drawing" : "Attached photo"} />)}</div>
               )}
               {entry.text && <div>{entry.text}</div>}
             </div>
@@ -139,8 +158,9 @@ export function AgentPanel({ session, placeholder, allowUploads, empty, starters
         {(uploads.length > 0 || uploading > 0) && (
           <div className="agent-photos">
             {uploads.map((u) => (
-              <button key={u} className="agent-thumb" onClick={() => setUploads(uploads.filter((x) => x !== u))} aria-label="Remove photo">
-                <img src={`${base}/uploads/${u}`} alt="" />
+              <button key={u} className="agent-thumb" onClick={() => setUploads(uploads.filter((x) => x !== u))}
+                aria-label={is3mf(u) ? `Remove ${modelName(u)}` : "Remove photo"}>
+                {is3mf(u) ? <ModelChip name={u} /> : <img src={`${base}/uploads/${u}`} alt="" />}
               </button>
             ))}
             {uploading > 0 && <span className="muted" style={{ fontSize: 12 }}>Uploading…</span>}
@@ -153,8 +173,8 @@ export function AgentPanel({ session, placeholder, allowUploads, empty, starters
             onPaste={allowUploads ? (e) => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); upload(files); } } : undefined}
             onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } }} />
           {allowUploads && <>
-            <input ref={fileInput} type="file" accept="image/*,.svg" multiple hidden onChange={(e) => { if (e.target.files) upload(e.target.files); e.target.value = ""; }} />
-            <button className="ibtn" onClick={() => fileInput.current?.click()} aria-label="Add photos or SVGs" title="Add photos or SVG drawings">
+            <input ref={fileInput} type="file" accept="image/*,.svg,.3mf" multiple hidden onChange={(e) => { if (e.target.files) upload(e.target.files); e.target.value = ""; }} />
+            <button className="ibtn" onClick={() => fileInput.current?.click()} aria-label="Add photos, SVGs or 3MF models" title="Add photos, SVG drawings or 3MF models">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 16-5-5-8 8" /></svg>
             </button>
           </>}

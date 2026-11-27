@@ -60,7 +60,7 @@ export function threemfPieces(src: string, object?: string): number {
  * The 3MF's build, placed as the file lays it out; with `object`, only the object of that name.
  * Modifier, support and other non-model volumes are left out.
  */
-function threemfToStl(src: string, dest: string, object?: string, fill?: { radius: number; height: number }) {
+function threemfToStl(src: string, dest: string, object?: string, fill?: { radius: number; height: number }): Vec[][] {
   const files = unzipSync(fs.readFileSync(src), { filter: (f) => f.name.endsWith(".model") || f.name === "Metadata/model_settings.config" });
   const only = namedObjects(files, object);
   const objects = new Map<string, Obj3mf>(); // "<file>#<id>"
@@ -105,6 +105,25 @@ function threemfToStl(src: string, dest: string, object?: string, fill?: { radiu
   }
   if (fill && triangles.length) triangles.push(...baseFill(triangles, fill));
   writeStl(triangles, dest);
+  return triangles;
+}
+
+/**
+ * A 3MF someone handed Claude, as an STL OpenSCAD can import() (the build as the file lays it
+ * out), with what Claude needs to know about it: its size, where it sits and its objects' names.
+ */
+export function importThreemf(src: string, dest: string) {
+  const tris = threemfToStl(src, dest);
+  if (!tris.length) throw Object.assign(new Error(`${path.basename(src)} has no printable objects`), { statusCode: 400 });
+  const min: Vec = [Infinity, Infinity, Infinity], max: Vec = [-Infinity, -Infinity, -Infinity];
+  for (const t of tris) for (const v of t) for (let c = 0; c < 3; c++) { min[c] = Math.min(min[c], v[c]); max[c] = Math.max(max[c], v[c]); }
+  const files = unzipSync(fs.readFileSync(src), { filter: (f) => f.name.endsWith(".model") || f.name === "Metadata/model_settings.config" });
+  const xml = Object.entries(files).map(([name, d]) => (name.endsWith(".config") ? "" : strFromU8(d))).join("\n");
+  const config = files["Metadata/model_settings.config"] ? strFromU8(files["Metadata/model_settings.config"]) : "";
+  // Bambu and Orca name objects in model_settings.config; others in the object's name attribute
+  const named = [...config.matchAll(/<object id="\d+">\s*<metadata key="name" value="([^"]*)"/g)].map((m) => m[1]);
+  const names = named.length ? named : [...xml.matchAll(/<object\b[^>]*\bname="([^"]*)"/g)].map((m) => m[1]);
+  return { triangles: tris.length, min, max, size: max.map((v, c) => v - min[c]) as Vec, objects: [...new Set(names)], pieces: threemfPieces(src) };
 }
 
 /**

@@ -9,6 +9,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { CACHE, CLAUDE, DATA, OPENSCAD, TOOL_BIN } from "./config.js";
 import { publish } from "./events.js";
+import { importThreemf } from "./mesh.js";
 import { listJobs } from "./jobs.js";
 import { checkModel } from "./modelchecks.js";
 
@@ -115,13 +116,20 @@ const IMAGE_TYPES: Record<string, string> = {
   "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif", "image/heic": ".heic", "image/svg+xml": ".svg",
 };
 
-export function saveUpload(id: string, type: string, body: Buffer): string {
+/** A name made safe to keep: letters, digits, dot, dash and underscore. */
+const safeName = (name: string) => path.basename(name).replace(/[^\w.-]+/g, "-").replace(/-+(?=\.)/g, "").replace(/^[-.]+/, "").slice(-60);
+
+export function saveUpload(id: string, type: string, body: Buffer, fileName = ""): string {
   getSession(id);
-  const ext = IMAGE_TYPES[type];
-  if (!ext) throw fail("Photos (JPEG, PNG, WebP, GIF, HEIC) or SVG drawings only");
+  const is3mf = type === "model/3mf" || /\.3mf$/i.test(fileName);
+  const ext = is3mf ? ".3mf" : IMAGE_TYPES[type];
+  if (!ext) throw fail("Photos (JPEG, PNG, WebP, GIF, HEIC), SVG drawings or 3MF models only");
+  if (is3mf && body.readUInt32LE(0) !== 0x04034b50) throw fail(`${fileName || "That file"} isn't a 3MF (a 3MF is a zip)`);
   const dir = path.join(sessionDir(id), "uploads");
   fs.mkdirSync(dir, { recursive: true });
-  const name = `${Date.now()}-${randomUUID().slice(0, 8)}${ext}`;
+  // a 3MF keeps its own name, which Claude sees and the model folder copy uses
+  const stem = is3mf ? `-${safeName(fileName).replace(/\.3mf$/i, "") || "model"}` : "";
+  const name = `${Date.now()}-${randomUUID().slice(0, 8)}${stem}${ext}`;
   fs.writeFileSync(path.join(dir, name), body);
   return name;
 }
@@ -376,8 +384,9 @@ export function send(id: string, text: string, uploads: string[] = [], shown?: s
   s.transcript.push({ role: "user", text: shown ?? text, uploads });
   s.running = true;
   let prompt = text.trim() || "Here are some files.";
-  const photos = files.filter((f) => !f.endsWith(".svg"));
+  const photos = files.filter((f) => !f.endsWith(".svg") && !f.endsWith(".3mf"));
   const svgs = files.filter((f) => f.endsWith(".svg"));
+  const models = files.filter((f) => f.endsWith(".3mf"));
   if (photos.length) prompt += `\n\nPhotos from the user (read them): ${photos.join(", ")}`;
 
   if (s.kind === "new" && !s.modelId) {
@@ -402,13 +411,13 @@ export function send(id: string, text: string, uploads: string[] = [], shown?: s
       }
       emit(s, true);
       publish("models", null);
-      run(s, prompt + attachSvgs(s, svgs));
+      run(s, prompt + attachSvgs(s, svgs) + attachModels(s, models));
     });
     return s;
   }
   snapshot(s, s.turns);
   emit(s, true);
-  run(s, prompt + attachSvgs(s, svgs));
+  run(s, prompt + attachSvgs(s, svgs) + attachModels(s, models));
   return s;
 }
 
@@ -426,6 +435,37 @@ function attachSvgs(s: AgentSession, svgs: string[]): string {
   return `\n\nSVG drawings from the user, copied into the model folder: ${names.join(", ")}
 Read them for the shape. To use one as geometry, import it relative to the .scad, e.g. linear_extrude(h) import("${path.basename(names[0])}");
 SVG units: OpenSCAD reads 1 px as 1 mm unless the file sets a width/height in mm; check the size with an echo or a render and scale to the dimensions the user gave.`;
+}
+
+/**
+ * 3MF models are copied into the model's folder (after the turn's snapshot, so undo removes
+ * them) with an STL of each beside it, which OpenSCAD can import() to build on.
+ */
+function attachModels(s: AgentSession, models: string[]): string {
+  if (!models.length || !s.modelId) return "";
+  const dir = path.join(DATA, "models", s.modelId);
+  const notes = models.map((file) => {
+    let base = path.basename(file).replace(/^\d+-[0-9a-f]{8}-/, "");
+    for (let i = 2; fs.existsSync(path.join(dir, base)); i++) base = base.replace(/(-\d+)?\.3mf$/, `-${i}.3mf`);
+    const rel = `models/${s.modelId}/${base}`;
+    fs.copyFileSync(file, path.join(dir, base));
+    const stl = base.replace(/\.3mf$/, ".stl");
+    try {
+      const m = importThreemf(file, path.join(dir, stl));
+      const mm = (v: number) => Math.round(v * 10) / 10;
+      return `- ${rel}: ${m.size.map(mm).join(" x ")} mm (X x Y x Z), ${m.pieces} piece${m.pieces === 1 ? "" : "s"}, ${m.triangles} triangles` +
+        `${m.objects.length ? `, objects: ${m.objects.join(", ")}` : ""}. As an STL: models/${s.modelId}/${stl}, spanning [${m.min.map(mm).join(", ")}] to [${m.max.map(mm).join(", ")}].`;
+    } catch (err) {
+      return `- ${rel}: couldn't read its meshes (${(err as Error).message}).`;
+    }
+  });
+  return `\n\n3MF models from the user, copied into the model folder:\n${notes.join("\n")}
+A 3MF is a zip you can't read directly: use the STL beside it. Look at it by rendering a PNG of it with OpenSCAD
+(a .scad in your scratch folder that does import("<absolute path of the STL>")). To build on it, import the STL
+relative to the .scad, e.g. import("${path.basename(models[0]).replace(/^\d+-[0-9a-f]{8}-/, "").replace(/\.3mf$/, ".stl")}"), and move it into place
+with translate() using the span above. It's a mesh, so you can add to it, cut from it, or measure off it, but not
+change its own dimensions as parameters; if the user wants that, model it again in OpenSCAD from its measurements.
+If the model is only the 3MF (no .scad yet), the app shows and slices the 3MF as it is.`;
 }
 
 /** One `claude -p` turn, streaming into the transcript. */

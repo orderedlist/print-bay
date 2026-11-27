@@ -75,7 +75,7 @@ export function CreatePanel({ live, close, created, toast }: Props) {
               <div style={{ border: "1px dashed var(--line)", borderRadius: 12, padding: 18, textAlign: "center", background: "var(--panel2)", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 16-5-5-8 8" /></svg>
                 <div>Drop photos of the space or the part</div>
-                <div className="faint" style={{ fontSize: 12 }}>or an SVG drawing to build from · paste works too</div>
+                <div className="faint" style={{ fontSize: 12 }}>or an SVG drawing or a 3MF model to build from · paste works too</div>
               </div>
               <div className="muted" style={{ fontSize: 12.5 }}>Your first message names the model and adds it to the library. Claude asks
                 a few questions, then designs a parametric OpenSCAD model sized for the K2, with a job file so it prints like everything else.</div>
