@@ -228,16 +228,19 @@ export function undo(id: string): AgentSession {
 
 // ---- the brief ----
 
-/** A new model's job file: the K2 profiles every library starts with (see config.ts). */
-function jobTemplate(slug: string): string {
+/**
+ * A new model's job file: the K2 profiles every library starts with (see config.ts). A 3MF the
+ * user brought prints as it is, with supports where Orca finds it needs them.
+ */
+function jobTemplate(slug: string, threemf?: string): string {
   return `name    = "${slug}"
-model   = "models/${slug}/${slug}.scad"   # rendered to STL when slicing
+${threemf ? `model   = "${threemf}"   # the 3MF as the user brought it` : `model   = "models/${slug}/${slug}.scad"   # rendered to STL when slicing`}
 color   = "black"
 copies  = 1
 
 [profiles]
 machine  = "profiles/k2-machine.json"
-process  = "profiles/k2-0.20mm-2wall-15pct-nosupport.json"
+process  = "profiles/k2-0.20mm-2wall-15pct${threemf ? "" : "-nosupport"}.json"
 filament = "profiles/k2-pla.json"
 
 [presets]
@@ -249,7 +252,7 @@ filament = "Creality Generic PLA @K2-all"
 retraction_distances_when_cut = "18"
 
 [overrides.process]
-enable_support = "0"`;
+enable_support = "${threemf ? 1 : 0}"`;
 }
 
 function brief(s: AgentSession): string {
@@ -393,7 +396,9 @@ export function send(id: string, text: string, uploads: string[] = [], shown?: s
     // name it and make its folder first, so the app can open it while Claude works
     s.transcript.push({ role: "note", text: "Naming it…" });
     emit(s, true);
-    nameFor(text.trim() || "a part from photos").then((name) => {
+    nameFor(text.trim() || (models.length
+      ? `a model from the file ${path.basename(models[0]).replace(/^\d+-[0-9a-f]{8}-/, "").replace(/\.3mf$/, "").replace(/[-_]+/g, " ")}`
+      : "a part from photos")).then((name) => {
       s.transcript = s.transcript.filter((e) => !(e.role === "note" && e.text === "Naming it…"));
       try {
         s.modelId = freeSlug(name);
@@ -444,11 +449,13 @@ SVG units: OpenSCAD reads 1 px as 1 mm unless the file sets a width/height in mm
 function attachModels(s: AgentSession, models: string[]): string {
   if (!models.length || !s.modelId) return "";
   const dir = path.join(DATA, "models", s.modelId);
+  const copied: string[] = [];
   const notes = models.map((file) => {
     let base = path.basename(file).replace(/^\d+-[0-9a-f]{8}-/, "");
     for (let i = 2; fs.existsSync(path.join(dir, base)); i++) base = base.replace(/(-\d+)?\.3mf$/, `-${i}.3mf`);
     const rel = `models/${s.modelId}/${base}`;
     fs.copyFileSync(file, path.join(dir, base));
+    copied.push(rel);
     const stl = base.replace(/\.3mf$/, ".stl");
     try {
       const m = importThreemf(file, path.join(dir, stl));
@@ -459,13 +466,24 @@ function attachModels(s: AgentSession, models: string[]): string {
       return `- ${rel}: couldn't read its meshes (${(err as Error).message}).`;
     }
   });
-  return `\n\n3MF models from the user, copied into the model folder:\n${notes.join("\n")}
+  // a new model that's only a 3MF so far gets a job file, so it can be sliced and printed as it is
+  // (after the snapshot, so undoing the turn removes it; the .scad brief replaces it if Claude designs one)
+  const job = path.join(DATA, "jobs", `${s.modelId}.toml`);
+  const designed = fs.readdirSync(dir).some((f) => f.endsWith(".scad")) || fs.existsSync(path.join(dir, "parts"));
+  let printable = "";
+  if (s.kind === "new" && !designed && !fs.existsSync(job)) {
+    fs.writeFileSync(job, jobTemplate(s.modelId, copied[0]) + "\n");
+    publish("models", null);
+    printable = `\nThe app wrote jobs/${s.modelId}.toml so the user can slice and print ${copied[0]} as it is (supports on where needed).
+If you design a .scad for this model, rewrite that job file from the template in your instructions to point at the .scad.`;
+  }
+  return `\n\n3MF models from the user, copied into the model folder:\n${notes.join("\n")}${printable}
 A 3MF is a zip you can't read directly: use the STL beside it. Look at it by rendering a PNG of it with OpenSCAD
 (a .scad in your scratch folder that does import("<absolute path of the STL>")). To build on it, import the STL
-relative to the .scad, e.g. import("${path.basename(models[0]).replace(/^\d+-[0-9a-f]{8}-/, "").replace(/\.3mf$/, ".stl")}"), and move it into place
+relative to the .scad, e.g. import("${path.basename(copied[0]).replace(/\.3mf$/, ".stl")}"), and move it into place
 with translate() using the span above. It's a mesh, so you can add to it, cut from it, or measure off it, but not
 change its own dimensions as parameters; if the user wants that, model it again in OpenSCAD from its measurements.
-If the model is only the 3MF (no .scad yet), the app shows and slices the 3MF as it is.`;
+If the model is only the 3MF (no .scad yet), the app shows it as the model.`;
 }
 
 /** One `claude -p` turn, streaming into the transcript. */
