@@ -60,7 +60,7 @@ export function threemfPieces(src: string, object?: string): number {
  * The 3MF's build, placed as the file lays it out; with `object`, only the object of that name.
  * Modifier, support and other non-model volumes are left out.
  */
-function threemfToStl(src: string, dest: string, object?: string, fill?: { radius: number; height: number }): Vec[][] {
+export function threemfToStl(src: string, dest: string, object?: string, fill?: { radius: number; height: number }): Vec[][] {
   const files = unzipSync(fs.readFileSync(src), { filter: (f) => f.name.endsWith(".model") || f.name === "Metadata/model_settings.config" });
   const only = namedObjects(files, object);
   const objects = new Map<string, Obj3mf>(); // "<file>#<id>"
