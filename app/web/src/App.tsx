@@ -113,7 +113,7 @@ export function App() {
         ) : selected ? (
           <ModelWorkspace key={selected.id} model={selected} live={live} printer={printer} pickPrinter={pickPrinter} caps={caps} tab={tab} setTab={setTab}
             jobName={parts[selected.id] ?? null} setJobName={(job) => setParts((p) => ({ ...p, [selected.id]: job }))} theme={theme} toggleTheme={toggleTheme}
-            shift={shift} inspectorSlot={inspectorSlot} close={() => go("/models")} goPrinter={() => go("/printer")} newModel={() => go("/create")} toast={toast} />
+            shift={shift} inspectorSlot={inspectorSlot} close={() => go("/models")} openModel={openModel} goPrinter={() => go("/printer")} newModel={() => go("/create")} toast={toast} />
         ) : (
           <>
             <div className="stage-hint">

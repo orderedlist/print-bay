@@ -10,6 +10,7 @@ import { getJob, getModel, isMaterial, listJobs, listModels, rates, scadParams, 
 import { meshFor } from "./mesh.js";
 import { findThumb, saveThumb } from "./thumbs.js";
 import { gzipped } from "./gzip.js";
+import { deleteModel, renameModel } from "./library.js";
 import { isNozzle, setNozzle, getNozzle, type Nozzle } from "./nozzle.js";
 import { checkModel } from "./modelchecks.js";
 import { toolpathsFor } from "./gcode.js";
@@ -105,6 +106,8 @@ export async function start(opts: StartOptions = {}) {
   app.get("/api/rates", async () => rates());
   app.get<{ Querystring: { printer?: string } }>("/api/models", async (req) =>
     listModels(nozzleFor(req.query.printer)).map((m) => ({ ...m, jobs: m.jobs.map((j) => ({ ...j, slicing: isSlicing(j.name) })) })));
+  app.post<{ Params: { id: string }; Body: { name?: string } }>("/api/models/:id/rename", async (req) => renameModel(req.params.id, String(req.body?.name ?? "")));
+  app.delete<{ Params: { id: string } }>("/api/models/:id", async (req) => deleteModel(req.params.id));
   app.get<{ Params: { id: string }; Querystring: { job?: string } }>("/api/models/:id/mesh", async (req, reply) => {
     return sendMesh(req.headers["accept-encoding"], reply, await meshFor(req.params.id, { job: req.query.job }));
   });

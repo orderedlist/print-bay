@@ -291,6 +291,9 @@ select.field { padding: 0 8px; }
 .scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); display: grid; place-items: center; padding: 20px; z-index: 50; }
 .dialog { width: 100%; max-width: 400px; padding: 22px; display: flex; flex-direction: column; gap: 16px; }
 .dialog h2 { font-size: 17px; }
+.rename { display: flex; gap: 6px; align-items: center; width: 100%; }
+.rename input { flex: 1; min-width: 0; height: 30px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--field); color: var(--ink); font: inherit; font-size: 14px; }
+.rename .cta { height: 30px; }
 
 /* ---- Claude ---- */
 .agent { display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; }
