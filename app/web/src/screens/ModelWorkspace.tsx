@@ -74,6 +74,8 @@ interface Props {
   /** where the inspector goes: beside the stage, not on it, so it can stack below on a phone */
   inspectorSlot: HTMLElement | null;
   close: () => void;
+  /** Open another model (this one, under its new name after a rename). */
+  openModel: (id: string) => void;
   goPrinter: () => void;
   newModel: () => void;
   toast: (msg: string, error?: boolean) => void;
@@ -83,7 +85,31 @@ interface Props {
 }
 
 /** A selected model: on the stage, with the bottom toolbar and the inspector beside it. */
-export function ModelWorkspace({ model, live, printer, pickPrinter, caps, tab, setTab, theme, toggleTheme, shift, inspectorSlot, close, goPrinter, newModel, toast, jobName, setJobName }: Props) {
+export function ModelWorkspace({ model, live, printer, pickPrinter, caps, tab, setTab, theme, toggleTheme, shift, inspectorSlot, close, openModel, goPrinter, newModel, toast, jobName, setJobName }: Props) {
+  // ---- renaming and deleting the model ----
+  const [newName, setNewName] = useState<string | null>(null); // the name being typed, while renaming
+  const [removing, setRemoving] = useState(false); // the delete dialog is open
+  const [libBusy, setLibBusy] = useState(false);
+  const rename = async () => {
+    const name = newName?.trim();
+    if (!name || name === title(model.id)) { setNewName(null); return; }
+    setLibBusy(true);
+    try {
+      const r = await api<{ id: string }>(`/api/models/${encodeURIComponent(model.id)}/rename`, { method: "POST", json: { name } });
+      setNewName(null);
+      openModel(r.id);
+    } catch (e) { toast((e as Error).message, true); }
+    setLibBusy(false);
+  };
+  const remove = async () => {
+    setLibBusy(true);
+    try {
+      await api(`/api/models/${encodeURIComponent(model.id)}`, { method: "DELETE" });
+      toast(`Moved ${title(model.id)} to the Trash.`);
+      close();
+    } catch (e) { toast((e as Error).message, true); setRemoving(false); }
+    setLibBusy(false);
+  };
   // a multi-part model (labelled jobs, say a plant and its pot) prints one part at a time
   const job = model.jobs.find((j) => j.name === jobName) ?? model.jobs[0];
   const partGroups = pickerGroups(model.jobs);
@@ -349,9 +375,27 @@ export function ModelWorkspace({ model, live, printer, pickPrinter, caps, tab, s
 
         <div className="sec">
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-            <h1 style={{ fontSize: 16 }}>{title(model.id)}</h1>
-            <span className="faint" style={{ fontSize: 12 }}>{kindLabel(model.kind)}</span>
-            {job?.stale && job.stats && <span style={{ fontSize: 12, color: "var(--warn)" }}>changed since slice</span>}
+            {newName !== null ? (
+              <form className="rename" onSubmit={(e) => { e.preventDefault(); rename(); }}>
+                <label className="sr-only" htmlFor="model-name">Model name</label>
+                <input id="model-name" autoFocus value={newName} disabled={libBusy} onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Escape") setNewName(null); }} onFocus={(e) => e.target.select()} />
+                <button type="submit" className="cta cta-sm go" disabled={libBusy || !newName.trim()}>{libBusy ? "Renaming…" : "Rename"}</button>
+                <button type="button" className="cta cta-sm" disabled={libBusy} onClick={() => setNewName(null)}>Cancel</button>
+              </form>
+            ) : <>
+              <h1 style={{ fontSize: 16 }}>{title(model.id)}</h1>
+              <span className="faint" style={{ fontSize: 12 }}>{kindLabel(model.kind)}</span>
+              {job?.stale && job.stats && <span style={{ fontSize: 12, color: "var(--warn)" }}>changed since slice</span>}
+              <span style={{ marginLeft: "auto", display: "flex", gap: 2, alignSelf: "center" }}>
+                <button className="ibtn" onClick={() => setNewName(title(model.id))} aria-label="Rename model" title="Rename">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="m13.5 6.5 4 4" /></svg>
+                </button>
+                <button className="ibtn" onClick={() => setRemoving(true)} aria-label="Delete model" title="Delete">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>
+                </button>
+              </span>
+            </>}
           </div>
           {partGroups && (
             <div className="parts" role="radiogroup" aria-label="Part to print">
@@ -616,6 +660,22 @@ export function ModelWorkspace({ model, live, printer, pickPrinter, caps, tab, s
           </div>
         )}
       </aside>, inspectorSlot)}
+
+      {removing && (
+        <div className="scrim" onClick={() => !libBusy && setRemoving(false)}>
+          <div className="panel dialog" role="dialog" aria-modal="true" aria-labelledby="delete-model" onClick={(e) => e.stopPropagation()}>
+            <h2 id="delete-model">Delete {title(model.id)}?</h2>
+            <div className="muted">
+              Its folder and job files{model.jobs.some((j) => j.plate) ? " and plates" : ""} move to the Trash on the Mac running Print Bay, so you can
+              still get them back. Its slices are removed. If the library is in git, the deletion shows in Changes until you commit it.
+            </div>
+            <div className="grid2">
+              <button className="cta cta-md" autoFocus disabled={libBusy} onClick={() => setRemoving(false)}>Cancel</button>
+              <button className="cta cta-md danger" disabled={libBusy} onClick={remove}>{libBusy ? "Deleting…" : "Delete"}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {confirm && (
         <div className="scrim" onClick={() => setConfirm(false)}>

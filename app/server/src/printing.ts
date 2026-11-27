@@ -61,6 +61,14 @@ function save() {
 
 export const getQueue = () => state;
 
+/** A job was renamed: queued and last-started entries follow it. */
+export function renameJobInQueue(from: string, to: string) {
+  const all = [...state.entries, ...Object.values(state.active)];
+  if (!all.some((e) => e.job === from)) return;
+  for (const e of all) if (e.job === from) e.job = to;
+  save();
+}
+
 const fail = (message: string, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 
 function rgb(hex: string) {

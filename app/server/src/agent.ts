@@ -151,9 +151,34 @@ function scopePaths(s: AgentSession): string[] {
   return paths;
 }
 
+/** Whether Claude is working on this model right now. */
+export function busyWith(modelId: string): boolean {
+  return [...sessions.values()].some((s) => s.running && s.modelId === modelId);
+}
+
+/**
+ * The model was renamed (library.ts moved its files): its chats follow it. Their undo snapshots
+ * hold the old paths, so earlier turns can no longer be undone.
+ */
+export function modelRenamed(from: string, to: string, jobs: Record<string, string>) {
+  if (!fs.existsSync(DIR)) return;
+  for (const f of fs.readdirSync(DIR).filter((f) => f.endsWith(".json"))) {
+    const s = getSession(f.slice(0, -5));
+    if (s.modelId !== from) continue;
+    s.modelId = to;
+    if (s.job && jobs[s.job]) s.job = jobs[s.job];
+    if (fs.existsSync(sessionDir(s.id))) for (const d of fs.readdirSync(sessionDir(s.id), { withFileTypes: true }))
+      if (d.isDirectory() && d.name.startsWith("turn-")) fs.rmSync(path.join(sessionDir(s.id), d.name), { recursive: true, force: true });
+    if (s.turns) s.transcript.push({ role: "note", text: "Renamed. Earlier changes can no longer be undone from here." });
+    s.turns = 0;
+    save(s);
+    emit(s, true);
+  }
+}
+
 // ---- naming a new model ----
 
-const slugify = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+export const slugify = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
 
 /** A short name for what the user asked for: Claude (Haiku) if it answers quickly, else the first few words. */
 function nameFor(request: string): Promise<string> {
